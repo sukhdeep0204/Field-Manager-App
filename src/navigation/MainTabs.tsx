@@ -1,4 +1,3 @@
-import React from 'react';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import HomeScreen from '../screens/HomeScreen';
 import TasksScreen from '../screens/TasksScreen';
@@ -9,14 +8,14 @@ import BottomNav from '../components/BottomNav';
 
 const Tab = createBottomTabNavigator();
 
-export default function MainTabs() {
+export default function MainTabs({onLogout}: {onLogout: () => void}) {
   return (
     <Tab.Navigator screenOptions={{headerShown: false}} tabBar={(props) => <BottomNav {...props} />}>
-      <Tab.Screen name="Tasks" component={TasksScreen} />
-      <Tab.Screen name="Harvest" component={HarvestScreen} />
       <Tab.Screen name="Home" component={HomeScreen} />
-      <Tab.Screen name="Request" component={RequestScreen} />
-      <Tab.Screen name="Profile" component={ProfileScreen} />
+      <Tab.Screen name="Tasks" component={TasksScreen} />
+      <Tab.Screen name="Lands" component={HarvestScreen} />
+      <Tab.Screen name="Team" component={RequestScreen} />
+      <Tab.Screen name="Profile">{() => <ProfileScreen onLogout={onLogout} />}</Tab.Screen>
     </Tab.Navigator>
   );
 }

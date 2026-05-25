@@ -1,75 +1,32 @@
 import React from 'react';
-import {View, Text, TouchableOpacity, StyleSheet, Dimensions} from 'react-native';
-import LinearGradient from 'react-native-linear-gradient';
-import * as Animatable from 'react-native-animatable';
-import Icon from './Icon';
-import {spacing} from '../styles/tokens';
+import {StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import {useTheme} from '../context/ThemeContext';
+import Icon from './Icon';
+import {useLanguage} from '../context/LanguageContext';
 
-const {width} = Dimensions.get('window');
+const GREEN = '#078B36';
+const INK = '#43506F';
 
-export default function BottomNav({state, descriptors, navigation}: any) {
-  const focusedIndex = state.index;
+export default function BottomNav({state, navigation}: any) {
   const insets = useSafeAreaInsets();
-  const paddingBottom = Math.max(spacing.sm, (insets.bottom || 0) + spacing.sm);
-  const {colors, isDark} = useTheme();
+  const {t} = useLanguage();
 
   return (
-    <View style={[styles.container, {paddingBottom: insets.bottom ? 0 : spacing.sm}]} pointerEvents="box-none">
-      <View style={[styles.bar, {paddingBottom, backgroundColor: colors.card, borderTopColor: colors.border}]}> 
-        {state.routes.map((route: any, idx: number) => {
-          const focused = focusedIndex === idx;
-          const label = route.name;
+    <View style={[styles.wrap, {paddingBottom: Math.max(insets.bottom, 8)}]}>
+      <View style={styles.bar}>
+        {state.routes.map((route: any, index: number) => {
+          const focused = state.index === index;
+          const iconName = mapIconName(route.name);
 
-          // render center Home button specially
-          if (label === 'Home') {
-            return (
-              <View key={label} style={styles.homeSlot}>
-                <TouchableOpacity
-                  onPress={() => navigation.navigate('Home')}
-                  activeOpacity={0.85}
-                  style={styles.homeOuter}
-                >
-                  <Animatable.View
-                    animation={focused ? 'pulse' : undefined}
-                    iterationCount={focused ? 'infinite' : 1}
-                    duration={1500}
-                    style={[styles.homeShadow, {shadowColor: colors.primary}]}
-                  >
-                    <LinearGradient 
-                      colors={[colors.primary, colors.accent]} 
-                      style={styles.homeButton}
-                    >
-                      <Icon name={'home'} size={28} color={colors.white} />
-                    </LinearGradient>
-                  </Animatable.View>
-                </TouchableOpacity>
-              </View>
-            );
-          }
-
-          // other tabs
           return (
             <TouchableOpacity
-              key={label}
-              style={styles.item}
+              key={route.key}
+              activeOpacity={0.78}
               onPress={() => navigation.navigate(route.name)}
-              activeOpacity={0.7}
-            >
-              <Animatable.View
-                animation={focused ? 'bounceIn' : 'fadeOut'}
-                duration={300}
-                style={[styles.iconContainer, focused && {backgroundColor: isDark ? colors.accentSecondary + '22' : '#F0FDF4'}]}
-              >
-                <Icon 
-                  name={mapIconName(label)} 
-                  size={24} 
-                  color={focused ? colors.primary : colors.textTertiary} 
-                />
-              </Animatable.View>
-              <Text style={[styles.label, {color: focused ? colors.primary : colors.textTertiary}]}> 
-                {label}
+              style={[styles.item, focused && styles.activeItem]}>
+              <Icon name={iconName} size={focused ? 26 : 24} color={focused ? GREEN : INK} />
+              <Text style={[styles.label, focused && styles.activeLabel]}>
+                {mapLabel(route.name, t)}
               </Text>
             </TouchableOpacity>
           );
@@ -79,89 +36,83 @@ export default function BottomNav({state, descriptors, navigation}: any) {
   );
 }
 
+function mapLabel(routeName: string, t: ReturnType<typeof useLanguage>['t']) {
+  switch (routeName) {
+    case 'Home':
+      return t('home');
+    case 'Tasks':
+      return t('tasks');
+    case 'Lands':
+      return t('lands');
+    case 'Team':
+      return t('team');
+    case 'Profile':
+      return t('profile');
+    default:
+      return routeName;
+  }
+}
+
 function mapIconName(routeName: string) {
   switch (routeName) {
+    case 'Home':
+      return 'House';
     case 'Tasks':
-      return 'check-square';
-    case 'Harvest':
-      return 'wheat';
-    case 'Request':
-      return 'file-text';
+      return 'ClipboardList';
+    case 'Lands':
+      return 'MapPinned';
+    case 'Team':
+      return 'Users';
     case 'Profile':
-      return 'user';
+      return 'UserRound';
     default:
-      return 'circle';
+      return 'Circle';
   }
 }
 
 const styles = StyleSheet.create({
-  container: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
+  wrap: {
+    backgroundColor: '#FFFFFF',
     bottom: 0,
-    alignItems: 'center',
-    zIndex: 50,
+    left: 0,
+    paddingHorizontal: 17,
+    paddingTop: 9,
+    position: 'absolute',
+    right: 0,
+    shadowColor: '#172033',
+    shadowOffset: {width: 0, height: -4},
+    shadowOpacity: 0.06,
+    shadowRadius: 14,
+    elevation: 8,
   },
   bar: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
-    // backgroundColor and borderTopColor are set dynamically
-    borderTopWidth: 1,
-    width: '100%',
-    paddingTop: spacing.md,
-    justifyContent: 'space-around',
-    alignItems: 'flex-end',
-    shadowColor: '#000',
-    shadowOffset: {width: 0, height: -2},
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 5,
+    height: 72,
+    justifyContent: 'space-between',
+    paddingHorizontal: 2,
   },
   item: {
     alignItems: 'center',
-    width: (width - 120) / 4,
-    paddingVertical: spacing.sm,
+    borderRadius: 10,
+    height: 66,
+    justifyContent: 'center',
+    width: 58,
   },
-  iconContainer: {
-    padding: spacing.sm,
-    borderRadius: 12,
-    marginBottom: spacing.xs,
+  activeItem: {
+    backgroundColor: '#EEF9F1',
+    width: 64,
   },
   label: {
+    color: INK,
     fontSize: 11,
-    marginTop: spacing.xs,
-    fontWeight: '600',
-    textAlign: 'center',
+    fontWeight: '700',
+    lineHeight: 15,
+    marginTop: 5,
   },
-  // Home Button
-  homeSlot: {
-    alignItems: 'center',
-    width: 100,
-    marginTop: -32,
-  },
-  homeOuter: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'transparent',
-  },
-  homeShadow: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    // shadowColor is set dynamically
-    shadowOffset: {width: 0, height: 8},
-    shadowOpacity: 0.2,
-    shadowRadius: 16,
-    elevation: 10,
-  },
-  homeButton: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    justifyContent: 'center',
-    alignItems: 'center',
+  activeLabel: {
+    color: GREEN,
+    fontWeight: '800',
   },
 });
