@@ -1,10 +1,10 @@
-import {useState} from 'react';
+import React, {useState} from 'react';
 import {
+  Alert,
   Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -13,382 +13,417 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
-import Svg, {
-  Circle,
-  Ellipse,
-  Path,
-  Polygon,
-  Rect,
-} from 'react-native-svg';
+import Svg, {Ellipse, G, Path} from 'react-native-svg';
+import Icon from '../components/Icon';
 
-const GREEN = '#2D7A38';
-const GREEN_DARK = '#1B5425';
-const INK = '#0E1B12';
-const MUTED = '#6B7280';
-const BORDER = '#D1D5DB';
-const GREEN_BORDER = '#4CAF50';
-
-/* ─── Decorative leaf clusters for top corners ─── */
-function TopLeafLeft() {
-  return (
-    <Svg width={110} height={120} viewBox="0 0 110 120" style={styles.leafLeft}>
-      {/* back large leaf */}
-      <Path d="M10 100 Q-10 40 50 10 Q60 60 10 100Z" fill="#A8D5A2" opacity={0.7} />
-      {/* mid leaf */}
-      <Path d="M30 110 Q5 55 65 20 Q72 72 30 110Z" fill="#7DC47A" opacity={0.85} />
-      {/* front leaf */}
-      <Path d="M55 115 Q25 65 80 30 Q90 82 55 115Z" fill="#5BB55A" opacity={0.9} />
-      {/* stem */}
-      <Path d="M10 100 Q35 85 55 115" stroke="#3D8C3D" strokeWidth={2} fill="none" />
-    </Svg>
-  );
-}
-
-function TopLeafRight() {
-  return (
-    <Svg width={110} height={120} viewBox="0 0 110 120" style={styles.leafRight}>
-      <Path d="M100 100 Q120 40 60 10 Q50 60 100 100Z" fill="#A8D5A2" opacity={0.7} />
-      <Path d="M80 110 Q105 55 45 20 Q38 72 80 110Z" fill="#7DC47A" opacity={0.85} />
-      <Path d="M55 115 Q85 65 30 30 Q20 82 55 115Z" fill="#5BB55A" opacity={0.9} />
-      <Path d="M100 100 Q75 85 55 115" stroke="#3D8C3D" strokeWidth={2} fill="none" />
-    </Svg>
-  );
-}
-
-/* ─── Farm landscape at bottom ─── */
-function FarmLandscape() {
-  return (
-    <Svg width="100%" height={160} viewBox="0 0 390 160" preserveAspectRatio="xMidYMax slice">
-      {/* sky tint */}
-      <Rect x={0} y={0} width={390} height={160} fill="#EAF5EA" />
-
-      {/* far rolling hill */}
-      <Path d="M0 110 Q60 65 130 90 Q200 115 270 75 Q330 45 390 80 L390 160 L0 160Z" fill="#C8E6C2" />
-
-      {/* near rolling hill */}
-      <Path d="M0 135 Q80 100 160 120 Q240 140 320 108 Q355 95 390 112 L390 160 L0 160Z" fill="#A5D6A7" />
-
-      {/* foreground strip */}
-      <Rect x={0} y={148} width={390} height={12} fill="#81C784" />
-
-      {/* Barn body */}
-      <Rect x={210} y={82} width={46} height={36} fill="#8B4513" />
-      {/* Barn roof */}
-      <Polygon points="206,82 256,82 231,60" fill="#6B3410" />
-      {/* Barn door */}
-      <Rect x={222} y={100} width={12} height={18} fill="#5C2D0A" rx={2} />
-      {/* Barn window */}
-      <Rect x={238} y={88} width={10} height={9} fill="#C4A882" rx={1} />
-
-      {/* Silo */}
-      <Rect x={264} y={78} width={20} height={40} fill="#B0BEC5" />
-      <Ellipse cx={274} cy={78} rx={10} ry={5} fill="#90A4AE" />
-
-      {/* Tree 1 (left) */}
-      <Rect x={95} y={115} width={7} height={25} fill="#5D4037" />
-      <Circle cx={98} cy={105} r={18} fill="#388E3C" />
-      <Circle cx={88} cy={110} r={12} fill="#43A047" />
-      <Circle cx={108} cy={110} r={12} fill="#43A047" />
-
-      {/* Tree 2 (mid-left) */}
-      <Rect x={148} y={118} width={6} height={22} fill="#5D4037" />
-      <Circle cx={151} cy={108} r={15} fill="#2E7D32" />
-      <Circle cx={142} cy={113} r={10} fill="#388E3C" />
-      <Circle cx={160} cy={113} r={10} fill="#388E3C" />
-
-      {/* Tree 3 (right of barn) */}
-      <Rect x={300} y={110} width={7} height={30} fill="#5D4037" />
-      <Circle cx={303} cy={100} r={17} fill="#388E3C" />
-      <Circle cx={293} cy={106} r={11} fill="#43A047" />
-      <Circle cx={314} cy={106} r={11} fill="#43A047" />
-
-      {/* Small bush left */}
-      <Ellipse cx={50} cy={145} rx={22} ry={10} fill="#66BB6A" />
-      <Ellipse cx={70} cy={143} rx={16} ry={9} fill="#4CAF50" />
-
-      {/* Small bush right */}
-      <Ellipse cx={340} cy={145} rx={20} ry={9} fill="#66BB6A" />
-      <Ellipse cx={358} cy={143} rx={14} ry={8} fill="#4CAF50" />
-    </Svg>
-  );
-}
-
+const INK = '#161D2B';
+const MUTED = '#717884';
+const GREEN = '#5DBB21';
+const GREEN_DARK = '#348F17';
+const BLUE = '#0D3F78';
+const BORDER = '#CED4DB';
+const CARD = '#FFFFFF';
 
 export default function LoginScreen({onLogin}: {onLogin?: () => void}) {
   const insets = useSafeAreaInsets();
-  const [userId, setUserId] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [userIdFocused, setUserIdFocused] = useState(false);
-  const [passFocused, setPassFocused] = useState(false);
 
   return (
-    <LinearGradient colors={['#FFFFFF', '#F0FAF1', '#E6F5E7']} style={styles.root} locations={[0, 0.4, 1]}>
-      <StatusBar barStyle="dark-content" backgroundColor="transparent" translucent />
-
-      {/* corner leaves */}
-      <TopLeafLeft />
-      <TopLeafRight />
-
+    <LinearGradient colors={['#F8FBF4', '#FFFFFF', '#EAF4DE']} style={styles.root}>
+      <FarmBackground />
       <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={0}>
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.flex}>
         <ScrollView
+          bounces={false}
+          showsVerticalScrollIndicator={false}
           contentContainerStyle={[
             styles.scroll,
-            {paddingTop: insets.top + 30, paddingBottom: insets.bottom + 16},
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}>
-
-          {/* Logo */}
-          <View style={styles.logoWrap}>
+            {paddingTop: insets.top + 22, paddingBottom: insets.bottom + 24},
+          ]}>
+          <View style={styles.brand}>
             <Image
               source={require('../assets/logo-3f.png')}
-              style={styles.logo}
+              style={styles.logoImage}
               resizeMode="contain"
             />
+            <Text style={styles.brandTitle}>
+              <Text style={styles.brandGreen}>SBR </Text>
+              <Text style={styles.brandBlue}>FIELD MANAGER</Text>
+            </Text>
+            <View style={styles.ornamentRow}>
+              <View style={styles.ornamentLine} />
+              <Icon name="Sprout" size={24} color={GREEN_DARK} />
+              <View style={styles.ornamentLine} />
+            </View>
+            <Text style={styles.tagline}>Visit. Track. Progress.</Text>
           </View>
 
-          {/* Heading */}
-          <Text style={styles.heading}>
-            Welcome <Text style={styles.headingGreen}>Back!</Text>
-          </Text>
-          <Text style={styles.subheading}>Sign in to continue to your account</Text>
+          <LoginCard onLogin={onLogin} />
 
-          {/* Form */}
-          <View style={styles.form}>
-            {/* User ID */}
-            <Text style={styles.label}>User ID</Text>
-            <View style={[styles.inputBox, userIdFocused && styles.inputBoxFocused]}>
-              <View style={styles.iconWrap}>
-                <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
-                  <Path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" stroke={GREEN} strokeWidth={2} strokeLinecap="round" />
-                  <Circle cx={12} cy={7} r={4} stroke={GREEN} strokeWidth={2} fill="none" />
-                </Svg>
-              </View>
-              <TextInput
-                style={styles.textInput}
-                placeholder="Enter your user ID"
-                placeholderTextColor="#9CA3AF"
-                autoCapitalize="none"
-                autoCorrect={false}
-                value={userId}
-                onChangeText={setUserId}
-                onFocus={() => setUserIdFocused(true)}
-                onBlur={() => setUserIdFocused(false)}
-              />
+          <View style={styles.footer}>
+            <Icon name="ShieldCheck" size={36} color="#FFFFFF" />
+            <View>
+              <Text style={styles.footerTitle}>Secure. Transparent. Accountable.</Text>
+              <Text style={styles.footerSub}>All field work. One place.</Text>
             </View>
-
-            {/* Password */}
-            <Text style={[styles.label, {marginTop: 18}]}>Password</Text>
-            <View style={[styles.inputBox, passFocused && styles.inputBoxFocused]}>
-              {/* lock icon */}
-              <View style={styles.iconWrap}>
-                <Svg width={20} height={20} viewBox="0 0 24 24" fill="none">
-                  <Rect x={3} y={11} width={18} height={11} rx={2} stroke={GREEN} strokeWidth={2} fill="none" />
-                  <Path d="M7 11V7a5 5 0 0 1 10 0v4" stroke={GREEN} strokeWidth={2} strokeLinecap="round" />
-                </Svg>
-              </View>
-              <TextInput
-                style={[styles.textInput, {flex: 1}]}
-                placeholder="Enter password"
-                placeholderTextColor="#9CA3AF"
-                secureTextEntry={!showPassword}
-                value={password}
-                onChangeText={setPassword}
-                onFocus={() => setPassFocused(true)}
-                onBlur={() => setPassFocused(false)}
-              />
-              <TouchableOpacity
-                onPress={() => setShowPassword(v => !v)}
-                activeOpacity={0.7}
-                style={styles.eyeBtn}>
-                {showPassword ? (
-                  <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
-                    <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z" stroke={MUTED} strokeWidth={2} fill="none" />
-                    <Circle cx={12} cy={12} r={3} stroke={MUTED} strokeWidth={2} fill="none" />
-                  </Svg>
-                ) : (
-                  <Svg width={22} height={22} viewBox="0 0 24 24" fill="none">
-                    <Path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22" stroke={MUTED} strokeWidth={2} strokeLinecap="round" />
-                  </Svg>
-                )}
-              </TouchableOpacity>
-            </View>
-
-            {/* Forgot Password */}
-            <TouchableOpacity
-              activeOpacity={0.7}
-              style={styles.forgotWrap}
-              onPress={() => {}}>
-              <Text style={styles.forgotText}>Forgot Password?</Text>
-            </TouchableOpacity>
-
-            {/* Login button */}
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={styles.loginBtn}
-              onPress={onLogin}>
-              <Text style={styles.loginBtnText}>Login</Text>
-            </TouchableOpacity>
-
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-
-      {/* Farm landscape */}
-      <View style={styles.farmWrap} pointerEvents="none">
-        <FarmLandscape />
-      </View>
-
-      {/* Footer */}
-      <View style={[styles.footer, {paddingBottom: insets.bottom + 8}]}>
-        <Text style={styles.footerText}>
-          New to 3F?{'  '}
-          <Text style={styles.footerLink}>Contact Admin</Text>
-        </Text>
-      </View>
     </LinearGradient>
+  );
+}
+
+function LoginCard({onLogin}: {onLogin?: () => void}) {
+  const [userId, setUserId] = useState('');
+  const [pin, setPin] = useState('');
+  const [remember, setRemember] = useState(false);
+  const [secure, setSecure] = useState(true);
+
+  const handleLogin = () => {
+    if (!userId.trim() || pin.length !== 4) {
+      Alert.alert('Missing details', 'Please enter your User ID and 4-digit PIN.');
+      return;
+    }
+    onLogin?.();
+  };
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.welcome}>Welcome Back</Text>
+      <Text style={styles.cardSubtitle}>Sign in to continue to your dashboard</Text>
+
+      <Text style={styles.label}>User ID</Text>
+      <View style={styles.field}>
+        <Icon name="UserRound" size={24} color={GREEN_DARK} />
+        <TextInput
+          autoCapitalize="none"
+          onChangeText={setUserId}
+          placeholder="Enter your User ID"
+          placeholderTextColor="#8A9099"
+          style={styles.input}
+          value={userId}
+        />
+      </View>
+
+      <Text style={styles.label}>4 Digit PIN</Text>
+      <View style={styles.field}>
+        <Icon name="LockKeyhole" size={24} color={GREEN_DARK} />
+        <TextInput
+          keyboardType="number-pad"
+          maxLength={4}
+          onChangeText={value => setPin(value.replace(/\D/g, '').slice(0, 4))}
+          placeholder="Enter 4-digit PIN"
+          placeholderTextColor="#8A9099"
+          secureTextEntry={secure}
+          style={styles.input}
+          value={pin}
+        />
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={() => setSecure(value => !value)}
+          style={styles.eyeButton}>
+          <Icon name={secure ? 'Eye' : 'EyeOff'} size={24} color="#858B93" />
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.optionRow}>
+        <TouchableOpacity
+          activeOpacity={0.75}
+          onPress={() => setRemember(value => !value)}
+          style={styles.rememberRow}>
+          <View style={[styles.checkbox, remember && styles.checkboxOn]}>
+            {remember && <Icon name="Check" size={15} color="#FFFFFF" />}
+          </View>
+          <Text style={styles.rememberText}>Remember me</Text>
+        </TouchableOpacity>
+        <TouchableOpacity activeOpacity={0.75}>
+          <Text style={styles.forgot}>Forgot PIN?</Text>
+        </TouchableOpacity>
+      </View>
+
+      <TouchableOpacity activeOpacity={0.86} onPress={handleLogin} style={styles.loginButton}>
+        <LinearGradient
+          colors={['#72C927', '#54B51E']}
+          start={{x: 0, y: 0.5}}
+          end={{x: 1, y: 0.5}}
+          style={styles.loginGradient}>
+          <Text style={styles.loginText}>Login</Text>
+        </LinearGradient>
+      </TouchableOpacity>
+
+      <View style={styles.dividerRow}>
+        <View style={styles.divider} />
+        <Text style={styles.orText}>or</Text>
+        <View style={styles.divider} />
+      </View>
+
+      <TouchableOpacity activeOpacity={0.82} onPress={onLogin} style={styles.biometricButton}>
+        <Icon name="Fingerprint" size={30} color={GREEN_DARK} />
+        <Text style={styles.biometricText}>Login with Biometrics</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function FarmBackground() {
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Svg width="100%" height="100%" viewBox="0 0 390 844" preserveAspectRatio="none">
+        <Path
+          d="M0 70 C66 92 72 150 126 150 C200 150 212 77 390 66 L390 0 L0 0 Z"
+          fill="#EEF5EA"
+          opacity={0.9}
+        />
+        <Path
+          d="M0 666 C55 620 104 604 170 626 C236 648 302 600 390 574 L390 844 L0 844 Z"
+          fill="#8ECF44"
+          opacity={0.66}
+        />
+        <Path
+          d="M0 705 C82 686 142 730 219 708 C278 692 331 676 390 647 L390 844 L0 844 Z"
+          fill="#5CA82E"
+          opacity={0.72}
+        />
+        <Path
+          d="M0 758 C84 746 168 777 250 765 C303 758 346 739 390 724 L390 844 L0 844 Z"
+          fill="#3F842D"
+          opacity={0.52}
+        />
+        <Path
+          d="M0 612 C55 575 98 570 155 584 C216 598 274 578 390 526 L390 664 C314 697 241 722 174 706 C100 690 45 661 0 683 Z"
+          fill="#B9DE82"
+          opacity={0.42}
+        />
+        <G opacity={0.42}>
+          {Array.from({length: 42}).map((_, index) => {
+            const x = (index * 17) % 390;
+            const h = 28 + (index % 7) * 9;
+            return (
+              <Path
+                key={index}
+                d={`M${x} 666 C${x + 4} ${642 - h / 3} ${x + 6} ${633 - h} ${x + 14} ${620 - h}`}
+                stroke="#6FAB34"
+                strokeWidth={2}
+                strokeLinecap="round"
+              />
+            );
+          })}
+        </G>
+        <G opacity={0.46} transform="translate(-8 245) rotate(-18)">
+          <Path d="M8 170 C22 116 39 70 78 20" stroke="#4EA334" strokeWidth={5} fill="none" />
+          <Ellipse cx={40} cy={90} rx={16} ry={48} fill="#58A83C" />
+          <Ellipse cx={72} cy={44} rx={16} ry={42} fill="#72B95A" />
+          <Ellipse cx={24} cy={142} rx={16} ry={43} fill="#4D9A35" />
+        </G>
+        <Path
+          d="M390 230 C352 298 371 375 332 431 C303 473 328 522 390 533 Z"
+          fill="#EFF6E8"
+          opacity={0.8}
+        />
+      </Svg>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: {flex: 1},
   flex: {flex: 1},
-  leafLeft: {position: 'absolute', top: 0, left: 0, zIndex: 0},
-  leafRight: {position: 'absolute', top: 0, right: 0, zIndex: 0},
   scroll: {
-    flexGrow: 1,
-    paddingHorizontal: 28,
-    paddingBottom: 220,
-  },
-  logoWrap: {
     alignItems: 'center',
-    marginBottom: 22,
+    minHeight: 844,
+    paddingHorizontal: 24,
   },
-  logo: {
-    width: 180,
-    height: 180,
+  brand: {
+    alignItems: 'center',
+    marginBottom: 16,
   },
-  heading: {
-    color: INK,
-    fontSize: 32,
-    fontWeight: '800',
+  logoImage: {
+    height: 132,
+    marginBottom: 10,
+    width: 132,
+  },
+  brandTitle: {
+    fontSize: 23,
+    fontWeight: '900',
+    marginTop: -2,
     textAlign: 'center',
-    lineHeight: 42,
   },
-  headingGreen: {
-    color: GREEN,
+  brandGreen: {color: '#4F9C33'},
+  brandBlue: {color: BLUE},
+  ornamentRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
   },
-  subheading: {
+  ornamentLine: {
+    backgroundColor: '#7BBE56',
+    height: 2,
+    width: 52,
+  },
+  tagline: {
     color: MUTED,
     fontSize: 15,
     fontWeight: '500',
-    textAlign: 'center',
-    marginTop: 6,
-    marginBottom: 32,
-    lineHeight: 22,
+    marginTop: 7,
   },
-  form: {
+  card: {
+    backgroundColor: CARD,
+    borderRadius: 18,
+    elevation: 9,
+    maxWidth: 332,
+    paddingHorizontal: 22,
+    paddingVertical: 22,
+    shadowColor: '#2E5A1A',
+    shadowOffset: {width: 0, height: 12},
+    shadowOpacity: 0.13,
+    shadowRadius: 24,
     width: '100%',
+  },
+  welcome: {
+    color: INK,
+    fontSize: 22,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  cardSubtitle: {
+    color: MUTED,
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 18,
+    marginTop: 6,
+    textAlign: 'center',
   },
   label: {
     color: INK,
-    fontSize: 15,
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: '800',
     marginBottom: 8,
   },
-  inputBox: {
+  field: {
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
     borderColor: BORDER,
-    borderRadius: 12,
-    borderWidth: 1.5,
+    borderRadius: 9,
+    borderWidth: 1,
     flexDirection: 'row',
-    height: 54,
-    paddingHorizontal: 10,
+    gap: 13,
+    height: 50,
+    marginBottom: 16,
+    paddingHorizontal: 14,
   },
-  inputBoxFocused: {
-    borderColor: GREEN_BORDER,
-    shadowColor: GREEN,
-    shadowOffset: {width: 0, height: 0},
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  iconWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#F0FAF1',
-    borderRadius: 8,
-    width: 36,
-    height: 36,
-    marginRight: 8,
-  },
-  textInput: {
+  input: {
     color: INK,
     flex: 1,
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '500',
     paddingVertical: 0,
-    marginLeft: 6,
   },
-  eyeBtn: {
-    padding: 6,
+  eyeButton: {
+    alignItems: 'center',
+    height: 42,
+    justifyContent: 'center',
+    width: 36,
   },
-  forgotWrap: {
-    alignSelf: 'flex-end',
-    marginTop: 12,
-    marginBottom: 24,
+  optionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 18,
   },
-  forgotText: {
-    color: GREEN,
-    fontSize: 14,
+  rememberRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 9,
+  },
+  checkbox: {
+    alignItems: 'center',
+    borderColor: '#AAB0B8',
+    borderRadius: 4,
+    borderWidth: 1,
+    height: 21,
+    justifyContent: 'center',
+    width: 21,
+  },
+  checkboxOn: {
+    backgroundColor: GREEN,
+    borderColor: GREEN,
+  },
+  rememberText: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  forgot: {
+    color: GREEN_DARK,
+    fontSize: 13,
     fontWeight: '700',
   },
-  loginBtn: {
+  loginButton: {
+    borderRadius: 9,
+    marginBottom: 12,
+    overflow: 'hidden',
+  },
+  loginGradient: {
     alignItems: 'center',
-    backgroundColor: GREEN_DARK,
-    borderRadius: 12,
-    height: 54,
+    height: 50,
     justifyContent: 'center',
-    shadowColor: GREEN_DARK,
-    shadowOffset: {width: 0, height: 6},
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 4,
   },
-  loginBtnText: {
+  loginText: {
     color: '#FFFFFF',
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: 0.5,
+    fontSize: 16,
+    fontWeight: '900',
   },
-  farmWrap: {
-    bottom: 28,
-    left: 0,
-    position: 'absolute',
-    right: 0,
-    zIndex: 0,
+  dividerRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 14,
+    marginBottom: 12,
+  },
+  divider: {
+    backgroundColor: '#E1E4E8',
+    flex: 1,
+    height: 1,
+  },
+  orText: {
+    color: MUTED,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  biometricButton: {
+    alignItems: 'center',
+    alignSelf: 'center',
+    borderColor: '#A7D18F',
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 14,
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: 22,
+    width: '86%',
+  },
+  biometricText: {
+    color: GREEN_DARK,
+    fontSize: 13,
+    fontWeight: '800',
   },
   footer: {
     alignItems: 'center',
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-    right: 0,
-    zIndex: 10,
-    paddingVertical: 10,
+    flexDirection: 'row',
+    gap: 16,
+    justifyContent: 'center',
+    marginTop: 30,
   },
-  footerText: {
-    color: INK,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  footerLink: {
-    color: GREEN,
+  footerTitle: {
+    color: '#FFFFFF',
+    fontSize: 15,
     fontWeight: '800',
+  },
+  footerSub: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '500',
+    marginTop: 6,
+    opacity: 0.95,
   },
 });

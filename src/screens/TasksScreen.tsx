@@ -4,13 +4,14 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import {useState} from 'react';
-import {useSafeAreaInsets} from 'react-native-safe-area-context';
+import { useEffect, useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../components/Icon';
-import {useLanguage} from '../context/LanguageContext';
+import { useLanguage } from '../context/LanguageContext';
 
 const INK = '#070B1A';
 const MUTED = '#43506F';
@@ -37,6 +38,23 @@ type Task = {
   priority: string;
   status: string;
   allocation: string;
+  subTasks?: SubTask[];
+};
+
+type SubTask = {
+  id: string;
+  title: string;
+  type: 'inventory' | 'field';
+  assignedTo: string;
+  status: 'Assigned' | 'Pending' | 'Completed';
+  description: string;
+  itemName?: string;
+  quantity?: string;
+  receivingCode?: string;
+  pickupPoint?: string;
+  destination?: string;
+  requiresPickupImage?: boolean;
+  requiresDropImage?: boolean;
 };
 
 type TaskGroup = {
@@ -47,19 +65,27 @@ type TaskGroup = {
   tasks: Task[];
 };
 
+type TopView = 'tasks' | 'fieldvisits';
+
 export default function TasksScreen() {
   const insets = useSafeAreaInsets();
-  const {t} = useLanguage();
-  const [activeTab, setActiveTab] = useState<'assigned' | 'pending' | 'completed'>('assigned');
+  const { t } = useLanguage();
+  const [topView, setTopView] = useState<TopView>('tasks');
+  const [activeTab, setActiveTab] = useState<
+    'assigned' | 'pending' | 'completed'
+  >('assigned');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
+  const [statusOverrides, setStatusOverrides] = useState<
+    Record<string, string>
+  >({});
+  const [selectedVisit, setSelectedVisit] = useState<typeof UPCOMING_FIELD_VISITS[number] | null>(null);
 
   const visibleGroups =
     activeTab === 'assigned'
       ? TASK_GROUPS
       : activeTab === 'pending'
-        ? PENDING_GROUPS
-        : [];
+      ? PENDING_GROUPS
+      : [];
   const assignedTaskCount = getTaskCount(TASK_GROUPS);
   const pendingTaskCount = getTaskCount(PENDING_GROUPS);
 
@@ -69,9 +95,10 @@ export default function TasksScreen() {
         style={styles.scroll}
         contentContainerStyle={[
           styles.content,
-          {paddingTop: insets.top + 18, paddingBottom: insets.bottom + 112},
+          { paddingTop: insets.top + 18, paddingBottom: insets.bottom + 112 },
         ]}
-        showsVerticalScrollIndicator={false}>
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.header}>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>{t('tasks')}</Text>
@@ -79,8 +106,11 @@ export default function TasksScreen() {
           </View>
           <TouchableOpacity
             activeOpacity={0.75}
-            onPress={() => Alert.alert(t('notifications'), t('taskNotifications'))}
-            style={styles.bellButton}>
+            onPress={() =>
+              Alert.alert(t('notifications'), t('taskNotifications'))
+            }
+            style={styles.bellButton}
+          >
             <Icon name="Bell" size={24} color={INK} />
             <View style={styles.notificationBadge}>
               <Text style={styles.notificationText}>3</Text>
@@ -88,86 +118,196 @@ export default function TasksScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.tabs}>
+        {/* Top switch bar */}
+        <View style={styles.switchBar}>
           <TouchableOpacity
-            activeOpacity={0.75}
-            onPress={() => setActiveTab('assigned')}
-            style={styles.tabButton}>
-            <Text style={[styles.tabText, activeTab === 'assigned' && styles.activeTabText]}>
-              {t('assigned')} ({assignedTaskCount})
-            </Text>
-            {activeTab === 'assigned' ? <View style={styles.activeIndicator} /> : null}
+            activeOpacity={0.8}
+            onPress={() => setTopView('tasks')}
+            style={[styles.switchBtn, topView === 'tasks' && styles.switchBtnActive]}
+          >
+            <Icon name="ClipboardList" size={15} color={topView === 'tasks' ? '#FFFFFF' : MUTED} />
+            <Text style={[styles.switchText, topView === 'tasks' && styles.switchTextActive]}>Tasks</Text>
+            <View style={[styles.switchCount, topView === 'tasks' && styles.switchCountActive]}>
+              <Text style={[styles.switchCountText, topView === 'tasks' && styles.switchCountTextActive]}>
+                {assignedTaskCount + pendingTaskCount}
+              </Text>
+            </View>
           </TouchableOpacity>
           <TouchableOpacity
-            activeOpacity={0.75}
-            onPress={() => setActiveTab('pending')}
-            style={styles.tabButton}>
-            <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>
-              {t('pending')} ({pendingTaskCount})
-            </Text>
-            {activeTab === 'pending' ? <View style={styles.activeIndicator} /> : null}
-          </TouchableOpacity>
-          <TouchableOpacity
-            activeOpacity={0.75}
-            onPress={() => setActiveTab('completed')}
-            style={styles.tabButton}>
-            <Text style={[styles.tabText, activeTab === 'completed' && styles.activeTabText]}>
-              {t('completed')}
-            </Text>
-            {activeTab === 'completed' ? <View style={styles.activeIndicator} /> : null}
+            activeOpacity={0.8}
+            onPress={() => setTopView('fieldvisits')}
+            style={[styles.switchBtn, topView === 'fieldvisits' && styles.switchBtnActive]}
+          >
+            <Icon name="MapPin" size={15} color={topView === 'fieldvisits' ? '#FFFFFF' : MUTED} />
+            <Text style={[styles.switchText, topView === 'fieldvisits' && styles.switchTextActive]}>Field Visits</Text>
+            <View style={[styles.switchCount, topView === 'fieldvisits' && styles.switchCountActive]}>
+              <Text style={[styles.switchCountText, topView === 'fieldvisits' && styles.switchCountTextActive]}>
+                {UPCOMING_FIELD_VISITS.length}
+              </Text>
+            </View>
           </TouchableOpacity>
         </View>
 
-        {activeTab !== 'completed' ? (
-          visibleGroups.map(group => (
-            <View key={group.title} style={styles.group}>
-              <Text style={[styles.groupTitle, {color: group.color}]}>
-                {getGroupTitle(group.title, t)}
-              </Text>
-              {group.tasks.map(task => (
-                <TaskCard
-                  key={task.farmId}
-                  task={task}
-                  color={group.color}
-                  cardBg={group.cardBg}
-                  borderColor={group.borderColor}
-                  onPress={() => setSelectedTask(task)}
-                />
-              ))}
+        {topView === 'tasks' ? (
+          <>
+            {/* Sub-tabs */}
+            <View style={styles.tabs}>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() => setActiveTab('assigned')}
+                style={styles.tabButton}
+              >
+                <Text style={[styles.tabText, activeTab === 'assigned' && styles.activeTabText]}>
+                  {t('assigned')} ({assignedTaskCount})
+                </Text>
+                {activeTab === 'assigned' ? <View style={styles.activeIndicator} /> : null}
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() => setActiveTab('pending')}
+                style={styles.tabButton}
+              >
+                <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>
+                  {t('pending')} ({pendingTaskCount})
+                </Text>
+                {activeTab === 'pending' ? <View style={styles.activeIndicator} /> : null}
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() => setActiveTab('completed')}
+                style={styles.tabButton}
+              >
+                <Text style={[styles.tabText, activeTab === 'completed' && styles.activeTabText]}>
+                  {t('completed')}
+                </Text>
+                {activeTab === 'completed' ? <View style={styles.activeIndicator} /> : null}
+              </TouchableOpacity>
             </View>
-          ))
+
+            {activeTab !== 'completed' ? (
+              visibleGroups.map(group => (
+                <View key={group.title} style={styles.group}>
+                  <Text style={[styles.groupTitle, { color: group.color }]}>
+                    {getGroupTitle(group.title, t)}
+                  </Text>
+                  {group.tasks.map(task => (
+                    <TaskCard
+                      key={task.farmId}
+                      task={task}
+                      color={group.color}
+                      cardBg={group.cardBg}
+                      borderColor={group.borderColor}
+                      onPress={() => setSelectedTask(task)}
+                    />
+                  ))}
+                </View>
+              ))
+            ) : (
+              <View style={styles.group}>
+                <Text style={[styles.groupTitle, { color: GREEN }]}>{t('completed')} (2)</Text>
+                {COMPLETED_TASKS.map(task => (
+                  <TaskCard
+                    key={task.farmId}
+                    task={task}
+                    color={GREEN}
+                    cardBg={GREEN_SOFT}
+                    borderColor={GREEN_BORDER}
+                    onPress={() => setSelectedTask(task)}
+                  />
+                ))}
+              </View>
+            )}
+          </>
         ) : (
-          <View style={styles.group}>
-            <Text style={[styles.groupTitle, {color: GREEN}]}>{t('completed')} (2)</Text>
-            {COMPLETED_TASKS.map(task => (
-              <TaskCard
-                key={task.farmId}
-                task={task}
-                color={GREEN}
-                cardBg={GREEN_SOFT}
-                borderColor={GREEN_BORDER}
-                onPress={() => setSelectedTask(task)}
-              />
+          <>
+            {/* Upcoming visits */}
+            <View style={styles.fvSectionHeader}>
+              <Text style={styles.fvSectionTitle}>Upcoming Field Visits</Text>
+              <View style={styles.fvCountBadge}>
+                <Text style={styles.fvCountText}>{UPCOMING_FIELD_VISITS.length}</Text>
+              </View>
+            </View>
+
+            {UPCOMING_FIELD_VISITS.map(visit => (
+              <TouchableOpacity
+                key={visit.id}
+                activeOpacity={0.82}
+                onPress={() => setSelectedVisit(visit)}
+                style={[styles.visitCard, { backgroundColor: visit.bg, borderColor: visit.color + '50' }]}
+              >
+                <View style={styles.visitCardTop}>
+                  <View style={[styles.visitDot, { backgroundColor: visit.color }]} />
+                  <Text style={[styles.visitActivity, { color: visit.color }]} numberOfLines={1}>
+                    {visit.activity}
+                  </Text>
+                  <View style={[styles.visitTimePill, { backgroundColor: visit.color + '20' }]}>
+                    <Icon name="Clock3" size={11} color={visit.color} />
+                    <Text style={[styles.visitTimePillText, { color: visit.color }]}>
+                      {visit.scheduledDate}, {visit.scheduledTime}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.visitLandId}>{visit.landId}</Text>
+                <Text style={styles.visitFarmer}>{visit.farmerName}</Text>
+                <View style={styles.visitRow}>
+                  <Icon name="MapPin" size={13} color={MUTED} />
+                  <Text style={styles.visitMeta}>{visit.location}</Text>
+                </View>
+                <View style={styles.visitFooterRow}>
+                  <View style={styles.visitPill}>
+                    <Icon name="Package" size={12} color={MUTED} />
+                    <Text style={styles.visitPillText}>{visit.items.length} items</Text>
+                  </View>
+                  <View style={styles.visitPill}>
+                    <Icon name="Droplets" size={12} color={MUTED} />
+                    <Text style={styles.visitPillText}>{visit.borewells} borewell{visit.borewells !== 1 ? 's' : ''}</Text>
+                  </View>
+                  <Text style={[styles.visitTapHintText, { color: visit.color, marginLeft: 'auto' as const }]}>Tap to log →</Text>
+                </View>
+              </TouchableOpacity>
             ))}
-          </View>
+
+            {/* Past visits placeholder */}
+            <Text style={[styles.fvSectionTitle, { marginTop: 24, marginBottom: 12 }]}>Past Visits</Text>
+            <View style={styles.emptyVisitsBox}>
+              <Icon name="CalendarCheck" size={32} color={MUTED} />
+              <Text style={styles.emptyVisitsText}>No past field visits recorded yet.</Text>
+            </View>
+          </>
         )}
       </ScrollView>
+
+      <VisitDetailModal
+        visit={selectedVisit}
+        onClose={() => setSelectedVisit(null)}
+        onSave={() => {
+          setSelectedVisit(null);
+          Alert.alert('Visit Saved', 'Field visit has been logged successfully.');
+        }}
+      />
 
       <TaskDetailModal
         task={
           selectedTask
             ? {
                 ...selectedTask,
-                status: statusOverrides[selectedTask.farmId] ?? selectedTask.status,
+                status:
+                  statusOverrides[selectedTask.farmId] ?? selectedTask.status,
               }
             : null
         }
         onClose={() => setSelectedTask(null)}
-        onAssign={(member) => {
-          Alert.alert(t('taskAllocation'), `${selectedTask?.title} - ${member}`);
+        onAssign={member => {
+          Alert.alert(
+            t('taskAllocation'),
+            `${selectedTask?.title} - ${member}`,
+          );
         }}
-        onStart={(task) => {
-          setStatusOverrides(current => ({...current, [task.farmId]: 'Work Pending'}));
+        onStart={task => {
+          setStatusOverrides(current => ({
+            ...current,
+            [task.farmId]: 'Work Pending',
+          }));
         }}
       />
     </View>
@@ -187,20 +327,38 @@ function TaskCard({
   borderColor: string;
   onPress: () => void;
 }) {
-  const {language, t} = useLanguage();
+  const { language, t } = useLanguage();
+  const prerequisiteCount =
+    task.subTasks?.filter(subTask => !isMainTaskSubTask(task, subTask))
+      .length ?? 0;
 
   return (
     <TouchableOpacity
       activeOpacity={0.82}
       onPress={onPress}
-      style={[styles.taskCard, {backgroundColor: cardBg, borderColor}]}>
-      <View style={[styles.cardAccent, {backgroundColor: color}]} />
+      style={[styles.taskCard, { backgroundColor: cardBg, borderColor }]}
+    >
+      <View style={[styles.cardAccent, { backgroundColor: color }]} />
       <View style={styles.taskDetails}>
-        <Text style={styles.taskTitle}>{translateTaskText(task.title, language)}</Text>
+        <Text style={styles.taskTitle}>
+          {translateTaskText(task.title, language)}
+        </Text>
         <DetailRow label={t('farmId')} value={task.farmId} />
         <DetailRow label={t('location')} value={task.location} />
         <DetailRow label={t('farmerName')} value={task.farmerName} />
-        <DetailRow label={t('dueTime')} value={task.dueTime} valueColor={color} />
+        <DetailRow
+          label={t('dueTime')}
+          value={task.dueTime}
+          valueColor={color}
+        />
+        {prerequisiteCount ? (
+          <View style={styles.subTaskCountPill}>
+            <Icon name="ListChecks" size={14} color={GREEN} />
+            <Text style={styles.subTaskCountText}>
+              {prerequisiteCount} sub task{prerequisiteCount > 1 ? 's' : ''}
+            </Text>
+          </View>
+        ) : null}
       </View>
     </TouchableOpacity>
   );
@@ -217,14 +375,73 @@ function TaskDetailModal({
   onAssign: (member: string) => void;
   onStart: (task: Task) => void;
 }) {
-  const {language, t} = useLanguage();
+  const { language, t } = useLanguage();
   const [staffDropdownOpen, setStaffDropdownOpen] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState('Rahul');
+  const [mainOwner, setMainOwner] = useState(
+    task?.assignedTo ?? 'Rahul Sharma',
+  );
+  const [ownerLocked, setOwnerLocked] = useState(false);
+  const [subTaskOwners, setSubTaskOwners] = useState<Record<string, string>>(
+    {},
+  );
+  const [pickupProofs, setPickupProofs] = useState<Record<string, boolean>>({});
+  const [dropProofs, setDropProofs] = useState<Record<string, boolean>>({});
+  const [completedSubTasks, setCompletedSubTasks] = useState<
+    Record<string, boolean>
+  >({});
+  const prerequisiteSubTasks =
+    task?.subTasks?.filter(subTask => !isMainTaskSubTask(task, subTask)) ?? [];
   const isWorkPending = task?.status === 'Work Pending';
   const isCompleted = task?.status === 'Completed';
+  const isOwnerLocked = ownerLocked || isWorkPending || isCompleted;
+  const hasBlockedSubTasks = Boolean(
+    prerequisiteSubTasks.some(
+      subTask =>
+        subTask.status !== 'Completed' && !completedSubTasks[subTask.id],
+    ),
+  );
+  const canStartTask = !isWorkPending && !hasBlockedSubTasks;
+  const completedPrerequisites = prerequisiteSubTasks.filter(
+    subTask => subTask.status === 'Completed' || completedSubTasks[subTask.id],
+  ).length;
+  const { dueDate, dueClock } = getDueParts(task?.dueTime);
+
+  const markPickupProof = (subTask: SubTask) => {
+    setPickupProofs(current => ({ ...current, [subTask.id]: true }));
+    Alert.alert('Pickup image', 'Pickup proof uploaded.');
+  };
+
+  const markDropProof = (subTask: SubTask) => {
+    if (subTask.requiresPickupImage && !pickupProofs[subTask.id]) {
+      Alert.alert(
+        'Pickup proof required',
+        'Upload pickup image before drop completion.',
+      );
+      return;
+    }
+    setDropProofs(current => ({ ...current, [subTask.id]: true }));
+    Alert.alert('Drop image', 'Completion proof uploaded.');
+  };
+
+  const markSubTaskDone = (subTask: SubTask) => {
+    if (subTask.requiresDropImage && !dropProofs[subTask.id]) {
+      Alert.alert(
+        'Completion proof required',
+        'Upload drop completion image first.',
+      );
+      return;
+    }
+    setCompletedSubTasks(current => ({ ...current, [subTask.id]: true }));
+  };
 
   return (
-    <Modal animationType="fade" transparent visible={!!task} onRequestClose={onClose}>
+    <Modal
+      animationType="fade"
+      transparent
+      visible={!!task}
+      onRequestClose={onClose}
+    >
       <View style={styles.modalBackdrop}>
         <View style={styles.taskModal}>
           {task ? (
@@ -232,76 +449,359 @@ function TaskDetailModal({
               <ScrollView
                 style={styles.modalScroll}
                 contentContainerStyle={styles.modalScrollContent}
-                showsVerticalScrollIndicator={false}>
+                showsVerticalScrollIndicator={false}
+              >
+                <View style={styles.sheetHandle} />
                 <View style={styles.modalHeader}>
-                  <View style={styles.modalTitleBlock}>
-                    <Text style={styles.modalTitle}>{translateTaskText(task.title, language)}</Text>
-                    <Text style={styles.modalSubtitle}>{task.farmId} • {task.location}</Text>
+                  <View style={styles.modalTaskIcon}>
+                    <Icon name="ClipboardList" size={30} color={GREEN} />
                   </View>
-                  <TouchableOpacity activeOpacity={0.75} onPress={onClose} style={styles.modalClose}>
+                  <View style={styles.modalTitleBlock}>
+                    <Text style={styles.modalTitle}>
+                      {translateTaskText(task.title, language)}
+                    </Text>
+                    <View style={styles.taskTagRow}>
+                      <View style={styles.fieldTag}>
+                        <Text style={styles.fieldTagText}>Field Task</Text>
+                      </View>
+                      <View style={styles.priorityTag}>
+                        <Text style={styles.priorityTagText}>
+                          {translateTaskText(task.priority, language)}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={onClose}
+                    style={styles.modalClose}
+                  >
                     <Icon name="X" size={20} color={INK} />
                   </TouchableOpacity>
                 </View>
 
-                <View style={styles.modalStatusRow}>
-                  <View style={styles.statusPill}>
-                    <Text style={styles.statusPillText}>{translateTaskText(task.status, language)}</Text>
+                <View style={styles.dueRow}>
+                  <View style={styles.dueItem}>
+                    <Icon name="CalendarDays" size={18} color={MUTED} />
+                    <Text style={styles.dueLabel}>Due: </Text>
+                    <Text style={styles.dueDateText}>{dueDate}</Text>
                   </View>
-                  <View style={styles.priorityPill}>
-                    <Text style={styles.priorityPillText}>{translateTaskText(task.priority, language)}</Text>
+                  <View style={styles.dueDivider} />
+                  <View style={styles.dueItem}>
+                    <Icon name="Clock3" size={19} color={MUTED} />
+                    <Text style={styles.dueTimeText}>{dueClock}</Text>
+                  </View>
+                  <View style={styles.statusTag}>
+                    <Text style={styles.statusTagText}>
+                      {translateTaskText(task.status, language)}
+                    </Text>
                   </View>
                 </View>
 
-                <View style={styles.topMapSection}>
-                  <Text style={styles.modalSectionTitle}>{t('farmLocation')}</Text>
-                  <View style={styles.mapPreview}>
-                    <View style={styles.mapRoadHorizontal} />
-                    <View style={styles.mapRoadVertical} />
-                    <View style={styles.mapRoute} />
-                    <View style={styles.mapMarker}>
-                      <Icon name="MapPin" size={22} color="#FFFFFF" />
+                <View style={styles.timeline}>
+                  <FlowStep
+                    active
+                    complete
+                    icon="ClipboardCheck"
+                    label="Assigned"
+                    caption="18 May"
+                  />
+                  <View
+                    style={[styles.timelineLine, styles.timelineLineComplete]}
+                  />
+                  <FlowStep
+                    active={!hasBlockedSubTasks || isWorkPending}
+                    complete={isWorkPending || isCompleted}
+                    icon="MapPin"
+                    label="In Progress"
+                  />
+                  <View style={styles.timelineLine} />
+                  <FlowStep
+                    active={isWorkPending}
+                    complete={isCompleted}
+                    icon="Camera"
+                    label="Verification"
+                  />
+                  <View style={styles.timelineLine} />
+                  <FlowStep
+                    active={isCompleted}
+                    complete={isCompleted}
+                    icon="CircleCheck"
+                    label="Completed"
+                  />
+                </View>
+
+                <View style={styles.cleanSection}>
+                  <Text style={styles.cleanSectionTitle}>Description</Text>
+                  <Text style={styles.descriptionText}>
+                    {translateTaskText(task.description, language)}
+                  </Text>
+                </View>
+
+                <View style={styles.cleanSection}>
+                  <View style={styles.sectionTitleRow}>
+                    <Text style={styles.cleanSectionTitle}>
+                      Sub Tasks ({completedPrerequisites}/
+                      {prerequisiteSubTasks.length})
+                    </Text>
+                    {prerequisiteSubTasks.length > 3 ? (
+                      <Text style={styles.viewAllText}>View All</Text>
+                    ) : null}
+                  </View>
+                  {prerequisiteSubTasks.length ? (
+                    <View style={styles.subTaskList}>
+                      {prerequisiteSubTasks.map((subTask, index) => {
+                        const owner =
+                          subTaskOwners[subTask.id] ?? subTask.assignedTo;
+                        const done =
+                          subTask.status === 'Completed' ||
+                          completedSubTasks[subTask.id];
+
+                        return (
+                          <View key={subTask.id} style={styles.subTaskListItem}>
+                            <TouchableOpacity
+                              activeOpacity={0.78}
+                              onPress={() => markSubTaskDone(subTask)}
+                              style={styles.subTaskStatusButton}
+                            >
+                              <View
+                                style={[
+                                  styles.subTaskStatusCircle,
+                                  done && styles.subTaskStatusCircleDone,
+                                ]}
+                              >
+                                {done ? (
+                                  <Icon
+                                    name="Check"
+                                    size={15}
+                                    color="#FFFFFF"
+                                  />
+                                ) : null}
+                              </View>
+                            </TouchableOpacity>
+                            <View style={styles.subTaskListCopy}>
+                              <Text style={styles.subTaskListTitle}>
+                                {subTask.title}
+                              </Text>
+                              <Text style={styles.subTaskListMeta}>
+                                {owner}
+                                {subTask.receivingCode
+                                  ? ` • ${subTask.receivingCode}`
+                                  : ''}
+                              </Text>
+                              {subTask.itemName ? (
+                                <Text style={styles.subTaskListMeta}>
+                                  {subTask.itemName} • {subTask.quantity}
+                                </Text>
+                              ) : null}
+                              {!done &&
+                              (subTask.requiresPickupImage ||
+                                subTask.requiresDropImage) ? (
+                                <View style={styles.proofRow}>
+                                  {subTask.requiresPickupImage ? (
+                                    <ProofButton
+                                      done={Boolean(pickupProofs[subTask.id])}
+                                      icon="Camera"
+                                      label={
+                                        pickupProofs[subTask.id]
+                                          ? 'Pickup done'
+                                          : 'Pickup photo'
+                                      }
+                                      onPress={() => markPickupProof(subTask)}
+                                    />
+                                  ) : null}
+                                  {subTask.requiresDropImage ? (
+                                    <ProofButton
+                                      done={Boolean(dropProofs[subTask.id])}
+                                      disabled={
+                                        subTask.requiresPickupImage &&
+                                        !pickupProofs[subTask.id]
+                                      }
+                                      icon="ImageUp"
+                                      label={
+                                        dropProofs[subTask.id]
+                                          ? 'Drop done'
+                                          : 'Drop photo'
+                                      }
+                                      onPress={() => markDropProof(subTask)}
+                                    />
+                                  ) : null}
+                                </View>
+                              ) : null}
+                            </View>
+                            <View
+                              style={[
+                                styles.subTaskStatePill,
+                                done
+                                  ? styles.subTaskStateDone
+                                  : index === completedPrerequisites
+                                  ? styles.subTaskStateActive
+                                  : styles.subTaskStatePending,
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.subTaskStateText,
+                                  done
+                                    ? styles.subTaskStateDoneText
+                                    : index === completedPrerequisites
+                                    ? styles.subTaskStateActiveText
+                                    : styles.subTaskStatePendingText,
+                                ]}
+                              >
+                                {done
+                                  ? 'Done'
+                                  : index === completedPrerequisites
+                                  ? 'In Progress'
+                                  : 'Pending'}
+                              </Text>
+                            </View>
+                          </View>
+                        );
+                      })}
                     </View>
-                    <View style={styles.mapLabel}>
-                      <Text style={styles.mapLabelTitle}>{task.location}</Text>
-                      <Text style={styles.mapLabelSub}>{task.farmId}</Text>
+                  ) : (
+                    <View style={styles.emptySubTaskBox}>
+                      <Text style={styles.emptySubTaskText}>
+                        No sub tasks. Main task can start directly.
+                      </Text>
+                    </View>
+                  )}
+                </View>
+
+                <View style={styles.cleanSection}>
+                  <Text style={styles.cleanSectionTitle}>Details</Text>
+                  <View style={styles.detailGrid}>
+                    <View style={styles.detailGridItem}>
+                      <Text style={styles.detailGridLabel}>Assigned By</Text>
+                      <Text style={styles.detailGridValue}>Amit Kumar</Text>
+                    </View>
+                    <View style={styles.detailGridItem}>
+                      <Text style={styles.detailGridLabel}>Assigned On</Text>
+                      <Text style={styles.detailGridValue}>18 May 2025</Text>
+                    </View>
+                    <View style={styles.detailGridItem}>
+                      <Text style={styles.detailGridLabel}>
+                        Related Land / Plot
+                      </Text>
+                      <Text style={styles.detailGridValue}>{task.farmId}</Text>
+                    </View>
+                    <View style={styles.detailGridItem}>
+                      <Text style={styles.detailGridLabel}>Location</Text>
+                      <View style={styles.locationValueRow}>
+                        <Text style={styles.detailGridValue}>
+                          {task.location}
+                        </Text>
+                        <Icon name="Navigation" size={15} color={GREEN} />
+                      </View>
                     </View>
                   </View>
                 </View>
 
-                <View style={styles.modalSection}>
-                  <Text style={styles.modalSectionTitle}>{t('taskDetails')}</Text>
-                  <ModalInfoRow label={t('farmer')} value={task.farmerName} />
-                  <ModalInfoRow label={t('dueTime')} value={task.dueTime} highlight />
-                  <ModalInfoRow label={t('assignedTo')} value={task.assignedTo} />
+                <View style={styles.cleanSection}>
+                  <Text style={styles.cleanSectionTitle}>Attachments (2)</Text>
+                  <View style={styles.attachmentRow}>
+                    <View style={styles.attachmentCard}>
+                      <View style={[styles.fileBadge, styles.pdfBadge]}>
+                        <Text style={styles.fileBadgeText}>PDF</Text>
+                      </View>
+                      <View style={styles.attachmentCopy}>
+                        <Text style={styles.attachmentTitle}>
+                          Plot_Details.pdf
+                        </Text>
+                        <Text style={styles.attachmentMeta}>245 KB</Text>
+                      </View>
+                      <Icon name="Download" size={18} color={MUTED} />
+                    </View>
+                    <View style={styles.attachmentCard}>
+                      <View style={[styles.fileBadge, styles.jpgBadge]}>
+                        <Text style={styles.fileBadgeText}>JPG</Text>
+                      </View>
+                      <View style={styles.attachmentCopy}>
+                        <Text style={styles.attachmentTitle}>
+                          Reference_Image.jpg
+                        </Text>
+                        <Text style={styles.attachmentMeta}>1.2 MB</Text>
+                      </View>
+                      <Icon name="Download" size={18} color={MUTED} />
+                    </View>
+                  </View>
                 </View>
 
-                <View style={styles.modalSection}>
+                <View style={styles.ownerPanel}>
+                  <View style={styles.ownerTitleRow}>
+                    <Text style={styles.cleanSectionTitle}>Owner</Text>
+                    {isOwnerLocked ? (
+                      <View style={styles.lockedOwnerPill}>
+                        <Icon name="Lock" size={12} color={MUTED} />
+                        <Text style={styles.lockedOwnerText}>Locked</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <View style={styles.ownerActionRow}>
+                    <TouchableOpacity
+                      activeOpacity={0.78}
+                      disabled={isOwnerLocked}
+                      onPress={() => {
+                        setMainOwner('Rahul Sharma');
+                        setOwnerLocked(true);
+                      }}
+                      style={[
+                        styles.selfActionButton,
+                        isOwnerLocked && styles.lockedActionButton,
+                      ]}
+                    >
+                      <Text style={styles.selfActionText}>Do myself</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      activeOpacity={0.78}
+                      disabled={isOwnerLocked}
+                      onPress={() => {
+                        setMainOwner(selectedStaff);
+                        setOwnerLocked(true);
+                        setStaffDropdownOpen(false);
+                        onAssign(selectedStaff);
+                      }}
+                      style={[
+                        styles.assignActionButton,
+                        isOwnerLocked && styles.lockedActionButton,
+                      ]}
+                    >
+                      <Text style={styles.assignActionText}>
+                        Assign selected
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
                   <Text style={styles.dropdownLabel}>{t('assignStaff')}</Text>
                   <TouchableOpacity
                     activeOpacity={0.78}
-                  disabled={isWorkPending || isCompleted}
-                  onPress={() => setStaffDropdownOpen(open => !open)}
-                  style={[
-                    styles.dropdownButton,
-                    (isWorkPending || isCompleted) && styles.dropdownButtonDisabled,
-                  ]}>
+                    disabled={isOwnerLocked}
+                    onPress={() => setStaffDropdownOpen(open => !open)}
+                    style={[
+                      styles.dropdownButton,
+                      isOwnerLocked && styles.dropdownButtonDisabled,
+                    ]}
+                  >
                     <View style={styles.dropdownValue}>
                       <Icon name="UserRound" size={17} color={GREEN} />
-                      <Text style={styles.dropdownValueText}>{selectedStaff}</Text>
+                      <Text style={styles.dropdownValueText}>
+                        {selectedStaff}
+                      </Text>
                     </View>
                     <Icon
                       name={
-                        isWorkPending || isCompleted
+                        isOwnerLocked
                           ? 'Lock'
                           : staffDropdownOpen
-                            ? 'ChevronUp'
-                            : 'ChevronDown'
+                          ? 'ChevronUp'
+                          : 'ChevronDown'
                       }
                       size={19}
                       color={MUTED}
                     />
                   </TouchableOpacity>
-                  {staffDropdownOpen && !isWorkPending && !isCompleted ? (
+                  {staffDropdownOpen && !isOwnerLocked ? (
                     <View style={styles.dropdownList}>
                       {TEAM_MEMBERS.map(member => (
                         <TouchableOpacity
@@ -310,9 +810,9 @@ function TaskDetailModal({
                           onPress={() => {
                             setSelectedStaff(member);
                             setStaffDropdownOpen(false);
-                            onAssign(member);
                           }}
-                          style={styles.dropdownItem}>
+                          style={styles.dropdownItem}
+                        >
                           <Text style={styles.dropdownItemText}>{member}</Text>
                           {selectedStaff === member ? (
                             <Icon name="Check" size={17} color={GREEN} />
@@ -322,31 +822,80 @@ function TaskDetailModal({
                     </View>
                   ) : null}
                 </View>
-
-                <View style={styles.modalSection}>
-                  <Text style={styles.modalSectionTitle}>{t('workInstructions')}</Text>
-                  <Text style={styles.modalBodyText}>{translateTaskText(task.description, language)}</Text>
-                </View>
               </ScrollView>
 
               {!isCompleted ? (
                 <View style={styles.modalActions}>
                   <TouchableOpacity
-                    disabled={isWorkPending}
-                    activeOpacity={0.78}
+                    disabled={!canStartTask}
+                    activeOpacity={canStartTask ? 0.78 : 1}
                     onPress={() => {
+                      if (hasBlockedSubTasks) {
+                        Alert.alert(
+                          'Sub tasks pending',
+                          'Complete all sub tasks before starting the main task.',
+                        );
+                        return;
+                      }
                       onStart(task);
                       Alert.alert(
                         t('taskStarted'),
-                        `${translateTaskText(task.title, language)} - ${t('workPending')}.`,
+                        `${translateTaskText(task.title, language)} - ${t(
+                          'workPending',
+                        )}.`,
                       );
                     }}
                     style={[
-                      styles.primaryAction,
-                      isWorkPending && styles.pendingAction,
-                    ]}>
-                    <Text style={styles.primaryActionText}>
-                      {isWorkPending ? t('workPending') : t('startTask')}
+                      styles.progressAction,
+                      !canStartTask && styles.blockedOutlineAction,
+                    ]}
+                  >
+                    <Icon
+                      name="PlayCircle"
+                      size={18}
+                      color={canStartTask ? '#FFFFFF' : MUTED}
+                    />
+                    <Text
+                      style={[
+                        styles.progressActionText,
+                        !canStartTask && styles.blockedOutlineText,
+                      ]}
+                    >
+                      Mark In Progress
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    disabled={!canStartTask}
+                    activeOpacity={canStartTask ? 0.78 : 1}
+                    onPress={() => {
+                      Alert.alert(
+                        'Completed',
+                        `${translateTaskText(
+                          task.title,
+                          language,
+                        )} marked complete.`,
+                      );
+                    }}
+                    style={[
+                      styles.completeAction,
+                      hasBlockedSubTasks && styles.blockedAction,
+                    ]}
+                  >
+                    <Icon
+                      name="CircleCheck"
+                      size={18}
+                      color={hasBlockedSubTasks ? '#FFFFFF' : GREEN}
+                    />
+                    <Text
+                      style={[
+                        styles.completeActionText,
+                        hasBlockedSubTasks && styles.blockedCompleteText,
+                      ]}
+                    >
+                      {hasBlockedSubTasks
+                        ? 'Complete Sub Tasks'
+                        : 'Mark as Completed'}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -371,10 +920,88 @@ function ModalInfoRow({
   return (
     <View style={styles.modalInfoRow}>
       <Text style={styles.modalInfoLabel}>{label}</Text>
-      <Text style={[styles.modalInfoValue, highlight && styles.modalInfoHighlight]}>
+      <Text
+        style={[styles.modalInfoValue, highlight && styles.modalInfoHighlight]}
+      >
         {value}
       </Text>
     </View>
+  );
+}
+
+function FlowStep({
+  active,
+  complete,
+  icon,
+  label,
+  caption,
+}: {
+  active?: boolean;
+  complete?: boolean;
+  icon: string;
+  label: string;
+  caption?: string;
+}) {
+  return (
+    <View style={styles.flowStep}>
+      <View
+        style={[
+          styles.flowStepIcon,
+          active && styles.flowStepIconActive,
+          complete && styles.flowStepIconComplete,
+        ]}
+      >
+        <Icon
+          name={icon}
+          size={20}
+          color={active || complete ? GREEN : MUTED}
+        />
+      </View>
+      <Text style={styles.flowStepLabel}>{label}</Text>
+      {caption ? <Text style={styles.flowStepCaption}>{caption}</Text> : null}
+    </View>
+  );
+}
+
+function ProofButton({
+  disabled,
+  done,
+  icon,
+  label,
+  onPress,
+}: {
+  disabled?: boolean;
+  done: boolean;
+  icon: string;
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      activeOpacity={disabled ? 1 : 0.78}
+      disabled={disabled}
+      onPress={onPress}
+      style={[
+        styles.proofButton,
+        done && styles.proofButtonDone,
+        disabled && styles.proofButtonDisabled,
+      ]}
+    >
+      <Icon
+        name={done ? 'CheckCircle2' : icon}
+        size={18}
+        color={done ? GREEN : disabled ? '#96A0AE' : GREEN}
+      />
+      <Text
+        style={[
+          styles.proofButtonText,
+          done && styles.proofButtonDoneText,
+          disabled && styles.proofButtonDisabledText,
+        ]}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
   );
 }
 
@@ -391,9 +1018,292 @@ function DetailRow({
     <View style={styles.detailRow}>
       <Text style={styles.detailLabel}>{label}</Text>
       <Text style={styles.detailColon}>:</Text>
-      <Text style={[styles.detailValue, valueColor ? {color: valueColor} : null]}>
+      <Text
+        style={[styles.detailValue, valueColor ? { color: valueColor } : null]}
+      >
         {value}
       </Text>
+    </View>
+  );
+}
+
+const CROP_HEALTH_OPTIONS = ['Excellent', 'Good', 'Fair', 'Poor', 'Critical'];
+const FENCING_OPTIONS = ['Good', 'Damaged', 'Partially Missing', 'Needs Repair'];
+
+function VisitDetailModal({
+  visit,
+  onClose,
+  onSave,
+}: {
+  visit: typeof UPCOMING_FIELD_VISITS[number] | null;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  const [photos, setPhotos] = useState([false, false, false]);
+  const [remarks, setRemarks] = useState('');
+  const [cropHealth, setCropHealth] = useState('');
+  const [cropHealthOpen, setCropHealthOpen] = useState(false);
+  const [fencing, setFencing] = useState('');
+  const [fencingOpen, setFencingOpen] = useState(false);
+  const [itemChecks, setItemChecks] = useState<Record<string, boolean>>({});
+  const [itemCounts, setItemCounts] = useState<Record<string, string>>({});
+  const [borewellStatus, setBorewellStatus] = useState<Record<number, boolean>>({});
+  const [cropIssue, setCropIssue] = useState('');
+  const [roadsOkay, setRoadsOkay] = useState<boolean | null>(null);
+  const [roadsNote, setRoadsNote] = useState('');
+  const [propertyDamage, setPropertyDamage] = useState<boolean | null>(null);
+  const [damageNote, setDamageNote] = useState('');
+
+  useEffect(() => {
+    setPhotos([false, false, false]);
+    setRemarks('');
+    setCropHealth('');
+    setCropHealthOpen(false);
+    setFencing('');
+    setFencingOpen(false);
+    setItemChecks({});
+    setItemCounts({});
+    setBorewellStatus({});
+    setCropIssue('');
+    setRoadsOkay(null);
+    setRoadsNote('');
+    setPropertyDamage(null);
+    setDamageNote('');
+  }, [visit?.id]);
+
+  const handlePhoto = (i: number) => {
+    setPhotos(cur => { const next = [...cur]; next[i] = true; return next; });
+    Alert.alert('Photo Uploaded', `Photo ${i + 1} uploaded successfully.`);
+  };
+
+  const handleSave = () => {
+    if (!cropHealth) { Alert.alert('Required', 'Please select crop health status.'); return; }
+    if (!fencing) { Alert.alert('Required', 'Please select fencing condition.'); return; }
+    const missing = photos.filter(p => !p).length;
+    if (missing > 0) { Alert.alert('Photos Required', `Please upload all 3 field photos. ${missing} remaining.`); return; }
+    onSave();
+  };
+
+  if (!visit) { return null; }
+
+  return (
+    <Modal visible={!!visit} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.fvModalOverlay}>
+        <TouchableOpacity activeOpacity={1} style={styles.fvBackdrop} onPress={onClose} />
+        <View style={styles.fvSheet}>
+          <View style={styles.fvHandle} />
+
+          {/* Header */}
+          <View style={styles.fvHeader}>
+            <View style={[styles.fvHeaderIcon, { backgroundColor: visit.bg }]}>
+              <Icon name="MapPin" size={22} color={visit.color} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fvTitle}>{visit.activity}</Text>
+              <Text style={[styles.fvSubId, { color: visit.color }]}>{visit.id} · {visit.landId}</Text>
+            </View>
+            <TouchableOpacity activeOpacity={0.76} onPress={onClose} style={styles.fvClose}>
+              <Icon name="X" size={21} color={INK} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.fvForm}>
+
+            {/* Visit details (read-only) */}
+            <View style={styles.vdDetailCard}>
+              <VDRow icon="User" label="Farmer" value={visit.farmerName} />
+              <VDRow icon="MapPin" label="Location" value={visit.location} />
+              <VDRow icon="CalendarDays" label="Date" value={visit.scheduledDate} />
+              <VDRow icon="Clock3" label="Time" value={visit.scheduledTime} isLast />
+            </View>
+
+            {/* Crop Health */}
+            <Text style={styles.fvFieldLabel}>Crop Health *</Text>
+            <TouchableOpacity style={styles.fvSelect} onPress={() => { setCropHealthOpen(o => !o); setFencingOpen(false); }}>
+              <Icon name="Leaf" size={16} color={cropHealth ? GREEN : MUTED} />
+              <Text style={[styles.fvSelectText, !cropHealth && { color: '#8B97AA' }]}>{cropHealth || 'Select crop health status'}</Text>
+              <Icon name={cropHealthOpen ? 'ChevronUp' : 'ChevronDown'} size={16} color={MUTED} />
+            </TouchableOpacity>
+            {cropHealthOpen && (
+              <View style={styles.fvDropdown}>
+                {CROP_HEALTH_OPTIONS.map((opt, i) => (
+                  <TouchableOpacity key={opt}
+                    style={[styles.fvDropdownItem, i === CROP_HEALTH_OPTIONS.length - 1 && { borderBottomWidth: 0 }]}
+                    onPress={() => { setCropHealth(opt); setCropHealthOpen(false); }}>
+                    <Text style={styles.fvDropdownText}>{opt}</Text>
+                    {cropHealth === opt && <Icon name="Check" size={15} color={GREEN} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {/* Fencing Condition */}
+            <Text style={styles.fvFieldLabel}>Fencing Condition *</Text>
+            <TouchableOpacity style={styles.fvSelect} onPress={() => { setFencingOpen(o => !o); setCropHealthOpen(false); }}>
+              <Icon name="Shield" size={16} color={fencing ? GREEN : MUTED} />
+              <Text style={[styles.fvSelectText, !fencing && { color: '#8B97AA' }]}>{fencing || 'Select fencing condition'}</Text>
+              <Icon name={fencingOpen ? 'ChevronUp' : 'ChevronDown'} size={16} color={MUTED} />
+            </TouchableOpacity>
+            {fencingOpen && (
+              <View style={styles.fvDropdown}>
+                {FENCING_OPTIONS.map((opt, i) => (
+                  <TouchableOpacity key={opt}
+                    style={[styles.fvDropdownItem, i === FENCING_OPTIONS.length - 1 && { borderBottomWidth: 0 }]}
+                    onPress={() => { setFencing(opt); setFencingOpen(false); }}>
+                    <Text style={styles.fvDropdownText}>{opt}</Text>
+                    {fencing === opt && <Icon name="Check" size={15} color={GREEN} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+
+            {/* Farm Items Check */}
+            <Text style={styles.fvFieldLabel}>Farm Items Check</Text>
+            <View style={styles.vdDetailCard}>
+              {visit.items.map((item, idx) => {
+                const checked = !!itemChecks[item.name];
+                const isLast = idx === visit.items.length - 1;
+                return (
+                  <View key={item.name} style={[styles.itemCheckRow, !isLast && styles.vdRowBorder]}>
+                    <TouchableOpacity activeOpacity={0.8}
+                      onPress={() => setItemChecks(c => ({ ...c, [item.name]: !c[item.name] }))}
+                      style={styles.itemCheckbox}>
+                      <Icon name={checked ? 'CheckSquare' : 'Square'} size={22} color={checked ? GREEN : MUTED} />
+                    </TouchableOpacity>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemName}>{item.name}</Text>
+                      <Text style={styles.itemExpected}>Expected: {item.expected}</Text>
+                    </View>
+                    {!checked && (
+                      <View style={styles.itemCountWrap}>
+                        <Text style={styles.itemCountLabel}>Found</Text>
+                        <TextInput
+                          style={styles.itemCountInput}
+                          keyboardType="numeric"
+                          placeholder="0"
+                          placeholderTextColor={MUTED}
+                          value={itemCounts[item.name] ?? ''}
+                          onChangeText={v => setItemCounts(c => ({ ...c, [item.name]: v }))}
+                        />
+                      </View>
+                    )}
+                    {!checked && <Icon name="AlertTriangle" size={16} color={RED} style={{ marginLeft: 4 }} />}
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* Borewell Status */}
+            <Text style={styles.fvFieldLabel}>Borewell Status ({visit.borewells} total)</Text>
+            <View style={styles.vdDetailCard}>
+              {Array.from({ length: visit.borewells }, (_, i) => {
+                const status = borewellStatus[i] as boolean | undefined;
+                const isLast = i === visit.borewells - 1;
+                return (
+                  <View key={i} style={[styles.vdRow, !isLast && styles.vdRowBorder]}>
+                    <Icon name="Droplets" size={15} color={BLUE} />
+                    <Text style={[styles.vdLabel, { width: 72 }]}>Borewell {i + 1}</Text>
+                    <View style={styles.yesNoRow}>
+                      <TouchableOpacity onPress={() => setBorewellStatus(s => ({ ...s, [i]: true }))}
+                        style={[styles.yesNoBtn, status === true && styles.yesNoBtnYes]}>
+                        <Text style={[styles.yesNoText, status === true && { color: GREEN }]}>Working</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => setBorewellStatus(s => ({ ...s, [i]: false }))}
+                        style={[styles.yesNoBtn, status === false && styles.yesNoBtnNo]}>
+                        <Text style={[styles.yesNoText, status === false && { color: RED }]}>Faulty</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* Crop Issues */}
+            <Text style={styles.fvFieldLabel}>Crop Issues</Text>
+            <View style={styles.fvTextAreaWrap}>
+              <TextInput multiline value={cropIssue} onChangeText={setCropIssue}
+                placeholder="Describe any crop issues (pest, disease, drought stress, etc.)..."
+                placeholderTextColor="#8B97AA" style={styles.fvTextArea} />
+            </View>
+
+            {/* Roads Condition */}
+            <Text style={styles.fvFieldLabel}>Roads Condition *</Text>
+            <View style={styles.yesNoPillRow}>
+              <TouchableOpacity activeOpacity={0.8} onPress={() => setRoadsOkay(true)}
+                style={[styles.yesNoPill, roadsOkay === true && styles.yesNoPillYes]}>
+                <Icon name="CheckCircle2" size={15} color={roadsOkay === true ? '#FFFFFF' : GREEN} />
+                <Text style={[styles.yesNoPillText, roadsOkay === true && styles.yesNoPillTextActive]}>All Good</Text>
+              </TouchableOpacity>
+              <TouchableOpacity activeOpacity={0.8} onPress={() => setRoadsOkay(false)}
+                style={[styles.yesNoPill, roadsOkay === false && styles.yesNoPillNo]}>
+                <Icon name="AlertCircle" size={15} color={roadsOkay === false ? '#FFFFFF' : RED} />
+                <Text style={[styles.yesNoPillText, roadsOkay === false && styles.yesNoPillTextActive]}>Issues Found</Text>
+              </TouchableOpacity>
+            </View>
+            {roadsOkay === false && (
+              <View style={[styles.fvTextAreaWrap, { marginTop: 8 }]}>
+                <TextInput multiline value={roadsNote} onChangeText={setRoadsNote}
+                  placeholder="Describe road issues..." placeholderTextColor="#8B97AA" style={styles.fvTextArea} />
+              </View>
+            )}
+
+            {/* Farm Property Damage */}
+            <Text style={styles.fvFieldLabel}>Farm Property Damage *</Text>
+            <View style={styles.yesNoPillRow}>
+              <TouchableOpacity activeOpacity={0.8} onPress={() => setPropertyDamage(false)}
+                style={[styles.yesNoPill, propertyDamage === false && styles.yesNoPillYes]}>
+                <Icon name="CheckCircle2" size={15} color={propertyDamage === false ? '#FFFFFF' : GREEN} />
+                <Text style={[styles.yesNoPillText, propertyDamage === false && styles.yesNoPillTextActive]}>No Damage</Text>
+              </TouchableOpacity>
+              <TouchableOpacity activeOpacity={0.8} onPress={() => setPropertyDamage(true)}
+                style={[styles.yesNoPill, propertyDamage === true && styles.yesNoPillNo]}>
+                <Icon name="AlertTriangle" size={15} color={propertyDamage === true ? '#FFFFFF' : RED} />
+                <Text style={[styles.yesNoPillText, propertyDamage === true && styles.yesNoPillTextActive]}>Damage Found</Text>
+              </TouchableOpacity>
+            </View>
+            {propertyDamage === true && (
+              <View style={[styles.fvTextAreaWrap, { marginTop: 8 }]}>
+                <TextInput multiline value={damageNote} onChangeText={setDamageNote}
+                  placeholder="Describe damage to farm properties..." placeholderTextColor="#8B97AA" style={styles.fvTextArea} />
+              </View>
+            )}
+
+            {/* Remarks */}
+            <Text style={styles.fvFieldLabel}>Remarks</Text>
+            <View style={styles.fvTextAreaWrap}>
+              <TextInput multiline value={remarks} onChangeText={setRemarks}
+                placeholder="Enter observations, findings or notes..."
+                placeholderTextColor="#8B97AA" style={styles.fvTextArea} />
+            </View>
+
+            {/* Field Photos */}
+            <Text style={styles.fvFieldLabel}>Field Photos (3 required) *</Text>
+            <View style={styles.fvPhotoGrid}>
+              {photos.map((done, i) => (
+                <TouchableOpacity key={i} activeOpacity={0.78} onPress={() => handlePhoto(i)}
+                  style={[styles.fvPhotoSlot, done && styles.fvPhotoSlotDone]}>
+                  <Icon name={done ? 'CheckCircle2' : 'Camera'} size={22} color={GREEN} />
+                  <Text style={styles.fvPhotoLabel}>{done ? 'Done' : `Photo ${i + 1}`}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity activeOpacity={0.82} onPress={handleSave} style={styles.fvSaveBtn}>
+              <Text style={styles.fvSaveBtnText}>Save Field Visit</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function VDRow({ icon, label, value, isLast }: { icon: string; label: string; value: string; isLast?: boolean }) {
+  return (
+    <View style={[styles.vdRow, !isLast && styles.vdRowBorder]}>
+      <Icon name={icon} size={15} color={MUTED} />
+      <Text style={styles.vdLabel}>{label}</Text>
+      <Text style={styles.vdValue}>{value}</Text>
     </View>
   );
 }
@@ -413,6 +1323,15 @@ function getGroupTitle(title: string, t: ReturnType<typeof useLanguage>['t']) {
     return `${t('upcoming')} ${title.replace('Upcoming', '')}`;
   }
   return title;
+}
+
+function getDueParts(dueTime?: string) {
+  if (!dueTime) {
+    return { dueDate: '-', dueClock: '-' };
+  }
+
+  const [datePart, timePart] = dueTime.split(',').map(part => part.trim());
+  return { dueDate: datePart || dueTime, dueClock: timePart || '' };
 }
 
 function translateTaskText(text: string, language: string) {
@@ -454,6 +1373,73 @@ function translateTaskText(text: string, language: string) {
 
   return hindiText[text] ?? text;
 }
+
+function isMainTaskSubTask(task: Task, subTask: SubTask) {
+  if (subTask.type !== 'field') {
+    return false;
+  }
+
+  const taskWords = task.title
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(word => word.length > 2);
+  const subTaskTitle = subTask.title.toLowerCase();
+
+  return (
+    taskWords.length > 0 && taskWords.every(word => subTaskTitle.includes(word))
+  );
+}
+
+const ORANGE = ORANGE_TEXT;
+const ORANGE_SOFT = '#FFF4EE';
+
+const UPCOMING_FIELD_VISITS = [
+  {
+    id: 'FV-2026-042', landId: 'FM-10035', location: 'Bori field shed, Durg',
+    farmerName: 'Mahesh Sahu', activity: 'Insecticide Spray',
+    scheduledDate: 'Today', scheduledTime: '07:00 PM', color: ORANGE, bg: ORANGE_SOFT,
+    items: [
+      { name: 'Tractor', expected: 1 },
+      { name: 'Pump Set', expected: 2 },
+      { name: 'Sprayer', expected: 3 },
+      { name: 'Plough', expected: 1 },
+    ],
+    borewells: 2,
+  },
+  {
+    id: 'FV-2026-043', landId: 'FM-10024', location: 'Bori, Durg',
+    farmerName: 'Ramesh Yadav', activity: 'Land Verification',
+    scheduledDate: '26 May', scheduledTime: '10:00 AM', color: BLUE, bg: BLUE_SOFT,
+    items: [
+      { name: 'Tractor', expected: 1 },
+      { name: 'Harvester', expected: 1 },
+      { name: 'Storage Tanks', expected: 4 },
+    ],
+    borewells: 1,
+  },
+  {
+    id: 'FV-2026-044', landId: 'FM-10040', location: 'Koni, Durg',
+    farmerName: 'Gopal Verma', activity: 'Land Survey',
+    scheduledDate: '27 May', scheduledTime: '09:00 AM', color: GREEN, bg: GREEN_SOFT,
+    items: [
+      { name: 'Tractor', expected: 2 },
+      { name: 'Pump Set', expected: 1 },
+      { name: 'Sprayer', expected: 2 },
+      { name: 'Drip Pipes (sets)', expected: 10 },
+    ],
+    borewells: 3,
+  },
+];
+
+const VISIT_ACTIVITY_TYPES = [
+  'Routine Visit', 'Land Verification', 'Farmer Meeting', 'Insecticide Spray',
+  'Soil Test', 'Land Survey', 'Photo Upload', 'Agreement Follow-up', 'Other',
+];
+
+const LAND_OPTIONS = [
+  'FM-10024 - Bori, Durg', 'FM-10028 - Jamgaon, Durg', 'FM-10035 - Bhilai, Durg',
+  'FM-10040 - Koni, Durg', 'FM-10045 - Bhilai, Durg', 'FM-10050 - Utai, Durg',
+];
 
 const TASK_GROUPS: TaskGroup[] = [
   {
@@ -499,18 +1485,45 @@ const TASK_GROUPS: TaskGroup[] = [
     borderColor: BLUE_BORDER,
     tasks: [
       {
-        title: 'Document Collection',
+        title: 'Insecticide Spray',
         farmId: 'FM-10035',
         location: 'Bori, Durg',
         farmerName: 'Mahesh Sahu',
         dueTime: '21 May 2025, 07:00 PM',
         description:
-          'Collect required documents and copies of land ownership proof.',
+          'Move assigned insecticide from inventory to the farm, then complete spray activity on the affected crop area.',
         assignedTo: 'Rahul Sharma',
         priority: 'Medium Priority',
         status: 'Due Today',
         allocation:
-          'Allocate document collection to a field executive carrying the verification checklist.',
+          'Main task can be done by self or assigned. Inventory movement and spray work can be split into sub tasks.',
+        subTasks: [
+          {
+            id: 'SUB-INV-10035-01',
+            title: 'Get insecticide from inventory to farm',
+            type: 'inventory',
+            assignedTo: 'Rahul Sharma',
+            status: 'Assigned',
+            description:
+              'Pick up the assigned insecticide from inventory and deliver it to the farm before spraying.',
+            itemName: 'Neem-based insecticide',
+            quantity: '12 Litres',
+            receivingCode: 'RC-7284',
+            pickupPoint: 'Central Inventory Store, Durg',
+            destination: 'FM-10035 - Bori field shed',
+            requiresPickupImage: true,
+            requiresDropImage: true,
+          },
+          {
+            id: 'SUB-FLD-10035-02',
+            title: 'Spray insecticide on affected crop',
+            type: 'field',
+            assignedTo: 'Rahul Sharma',
+            status: 'Pending',
+            description:
+              'Spray the delivered insecticide on the affected crop rows and report completion.',
+          },
+        ],
       },
     ],
   },
@@ -526,7 +1539,8 @@ const TASK_GROUPS: TaskGroup[] = [
         location: 'Koni, Durg',
         farmerName: 'Gopal Verma',
         dueTime: '23 May 2025, 10:00 AM',
-        description: 'Conduct land survey and update the land information in the system.',
+        description:
+          'Conduct land survey and update the land information in the system.',
         assignedTo: 'Rahul Sharma',
         priority: 'Normal Priority',
         status: 'Upcoming',
@@ -625,7 +1639,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginLeft: 14,
     shadowColor: '#182033',
-    shadowOffset: {width: 0, height: 7},
+    shadowOffset: { width: 0, height: 7 },
     shadowOpacity: 0.05,
     shadowRadius: 14,
     width: 44,
@@ -645,6 +1659,217 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '800',
+  },
+  switchBar: {
+    flexDirection: 'row',
+    backgroundColor: '#EAECF0',
+    borderRadius: 12,
+    padding: 3,
+    marginBottom: 18,
+    gap: 3,
+  },
+  switchBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  switchBtnActive: {
+    backgroundColor: GREEN,
+  },
+  switchText: {
+    color: MUTED,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  switchTextActive: {
+    color: '#FFFFFF',
+  },
+  switchCount: {
+    backgroundColor: '#FFE0E0',
+    borderRadius: 999,
+    minWidth: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  switchCountActive: {
+    backgroundColor: '#FF3B30',
+  },
+  switchCountText: {
+    color: '#E60000',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  switchCountTextActive: {
+    color: '#FFFFFF',
+  },
+  logVisitButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: GREEN_SOFT,
+    borderColor: GREEN_BORDER,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 20,
+  },
+  logVisitIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderColor: GREEN_BORDER,
+    borderWidth: 1,
+  },
+  logVisitCopy: { flex: 1 },
+  logVisitTitle: { color: INK, fontSize: 15, fontWeight: '900' },
+  logVisitSub: { color: MUTED, fontSize: 12, fontWeight: '600', marginTop: 2 },
+  fvSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  fvSectionTitle: { color: INK, fontSize: 16, fontWeight: '900' },
+  fvCountBadge: {
+    backgroundColor: GREEN_SOFT,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  fvCountText: { color: GREEN, fontSize: 12, fontWeight: '900' },
+  visitCardsRow: { gap: 10, paddingBottom: 4 },
+  visitCard: {
+    borderRadius: 12,
+    padding: 14,
+    gap: 4,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  visitCardTop: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  visitDot: { width: 8, height: 8, borderRadius: 4 },
+  visitActivity: { fontSize: 13, fontWeight: '900', flex: 1 },
+  visitLandId: { color: INK, fontSize: 15, fontWeight: '900' },
+  visitFarmer: { color: MUTED, fontSize: 12, fontWeight: '700' },
+  visitRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  visitMeta: { color: MUTED, fontSize: 11, fontWeight: '600', flex: 1 },
+  visitTapHint: { marginTop: 8 },
+  visitTapHintText: { fontSize: 11, fontWeight: '800' },
+  emptyVisitsBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 40,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+  },
+  emptyVisitsText: { color: MUTED, fontSize: 13, fontWeight: '700' },
+  fvModalOverlay: { flex: 1, justifyContent: 'flex-end' },
+  fvBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(7,11,26,0.45)' },
+  fvSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    maxHeight: '90%',
+  },
+  fvHandle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: '#D8DDE7',
+    alignSelf: 'center',
+    marginTop: 10, marginBottom: 4,
+  },
+  fvHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: CARD_BORDER,
+  },
+  fvHeaderIcon: {
+    width: 38, height: 38, borderRadius: 10,
+    backgroundColor: GREEN_SOFT,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  fvTitle: { flex: 1, color: INK, fontSize: 17, fontWeight: '900' },
+  fvClose: {
+    width: 34, height: 34, borderRadius: 8,
+    backgroundColor: '#F1F4F8',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  fvForm: { padding: 16, gap: 4, paddingBottom: 40 },
+  fvFieldLabel: { color: INK, fontSize: 13, fontWeight: '800', marginTop: 12, marginBottom: 6 },
+  fvSelect: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    borderWidth: 1, borderColor: CARD_BORDER, borderRadius: 9,
+    height: 44, paddingHorizontal: 12,
+  },
+  fvSelectText: { flex: 1, color: INK, fontSize: 13, fontWeight: '700' },
+  fvDropdown: {
+    borderWidth: 1, borderColor: CARD_BORDER,
+    borderRadius: 9, overflow: 'hidden', marginTop: 4,
+  },
+  fvDropdownItem: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 12, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: CARD_BORDER,
+  },
+  fvDropdownText: { color: INK, fontSize: 13, fontWeight: '700' },
+  fvTextAreaWrap: {
+    borderWidth: 1, borderColor: CARD_BORDER, borderRadius: 9, padding: 10,
+  },
+  fvTextArea: { color: INK, fontSize: 13, minHeight: 80, textAlignVertical: 'top' },
+  fvPhotoGrid: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  fvPhotoSlot: {
+    flex: 1, height: 80, borderRadius: 10,
+    borderWidth: 1.5, borderColor: GREEN_BORDER, borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center', gap: 4,
+    backgroundColor: GREEN_SOFT,
+  },
+  fvPhotoSlotDone: { backgroundColor: GREEN_SOFT, borderStyle: 'solid' },
+  fvPhotoLabel: { color: GREEN, fontSize: 10, fontWeight: '800' },
+  fvSaveBtn: {
+    backgroundColor: GREEN, borderRadius: 10,
+    height: 48, alignItems: 'center', justifyContent: 'center',
+    marginTop: 20,
+  },
+  fvSaveBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900' },
+  mainCategoryRow: {
+    flexDirection: 'row',
+    marginBottom: 14,
+    gap: 8,
+  },
+  mainCategoryChip: {
+    alignItems: 'center',
+    borderColor: GREEN_BORDER,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    gap: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  mainCategoryChipActive: {
+    backgroundColor: GREEN,
+    borderColor: GREEN,
+  },
+  mainCategoryText: {
+    color: GREEN,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  mainCategoryTextActive: {
+    color: '#FFFFFF',
   },
   tabs: {
     borderBottomColor: '#DCE3EA',
@@ -695,7 +1920,7 @@ const styles = StyleSheet.create({
     paddingRight: 11,
     paddingTop: 14,
     shadowColor: '#182033',
-    shadowOffset: {width: 0, height: 8},
+    shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.04,
     shadowRadius: 14,
   },
@@ -743,20 +1968,38 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 19,
   },
+  subTaskCountPill: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFFFFF',
+    borderColor: GREEN_BORDER,
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    marginTop: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  subTaskCountText: {
+    color: GREEN,
+    fontSize: 12,
+    fontWeight: '900',
+  },
   modalBackdrop: {
     alignItems: 'center',
     backgroundColor: 'rgba(7, 11, 26, 0.42)',
     flex: 1,
     justifyContent: 'center',
-    paddingHorizontal: 18,
+    paddingHorizontal: 12,
   },
   taskModal: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    maxHeight: '82%',
+    borderRadius: 20,
+    maxHeight: '86%',
     overflow: 'hidden',
     shadowColor: '#000000',
-    shadowOffset: {width: 0, height: 16},
+    shadowOffset: { width: 0, height: 16 },
     shadowOpacity: 0.18,
     shadowRadius: 24,
     width: '100%',
@@ -765,26 +2008,71 @@ const styles = StyleSheet.create({
     flexGrow: 0,
   },
   modalScrollContent: {
-    paddingBottom: 8,
-    paddingHorizontal: 18,
-    paddingTop: 18,
+    paddingBottom: 12,
+    paddingHorizontal: 14,
+    paddingTop: 8,
+  },
+  sheetHandle: {
+    alignSelf: 'center',
+    backgroundColor: '#D8DDE7',
+    borderRadius: 999,
+    height: 4,
+    marginBottom: 14,
+    width: 84,
   },
   modalHeader: {
-    alignItems: 'flex-start',
+    alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: 14,
+  },
+  modalTaskIcon: {
+    alignItems: 'center',
+    backgroundColor: GREEN_SOFT,
+    borderRadius: 12,
+    height: 48,
+    justifyContent: 'center',
+    marginRight: 12,
+    width: 48,
   },
   modalTitleBlock: {
     flex: 1,
     minWidth: 0,
-    paddingRight: 12,
+    paddingRight: 8,
   },
   modalTitle: {
     color: INK,
-    fontSize: 24,
+    fontSize: 22,
     fontWeight: '900',
-    lineHeight: 30,
+    lineHeight: 27,
+  },
+  taskTagRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginTop: 7,
+  },
+  fieldTag: {
+    backgroundColor: GREEN_SOFT,
+    borderRadius: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  fieldTagText: {
+    color: GREEN,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  priorityTag: {
+    backgroundColor: '#FFF1F2',
+    borderRadius: 7,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  priorityTagText: {
+    color: '#EF4444',
+    fontSize: 12,
+    fontWeight: '900',
   },
   modalSubtitle: {
     color: MUTED,
@@ -795,13 +2083,109 @@ const styles = StyleSheet.create({
   },
   modalClose: {
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderColor: CARD_BORDER,
-    borderRadius: 15,
-    borderWidth: 1,
-    height: 34,
+    backgroundColor: '#F2F4F8',
+    borderRadius: 18,
+    height: 36,
     justifyContent: 'center',
-    width: 34,
+    width: 36,
+  },
+  dueRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 9,
+    marginBottom: 18,
+  },
+  dueItem: {
+    alignItems: 'center',
+    flexDirection: 'row',
+  },
+  dueLabel: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '800',
+    marginLeft: 5,
+  },
+  dueDateText: {
+    color: '#EF4444',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  dueTimeText: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '800',
+    marginLeft: 6,
+  },
+  dueDivider: {
+    backgroundColor: '#CBD5E1',
+    height: 22,
+    width: 1,
+  },
+  statusTag: {
+    backgroundColor: '#FFF3EA',
+    borderRadius: 7,
+    marginLeft: 'auto',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  statusTagText: {
+    color: ORANGE_TEXT,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  timeline: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    marginBottom: 20,
+  },
+  flowStep: {
+    alignItems: 'center',
+    width: 64,
+  },
+  flowStepIcon: {
+    alignItems: 'center',
+    backgroundColor: '#F4F6FA',
+    borderColor: '#DDE4EE',
+    borderRadius: 23,
+    borderWidth: 1.5,
+    height: 46,
+    justifyContent: 'center',
+    width: 46,
+  },
+  flowStepIconActive: {
+    backgroundColor: GREEN_SOFT,
+    borderColor: GREEN_BORDER,
+  },
+  flowStepIconComplete: {
+    backgroundColor: GREEN_SOFT,
+    borderColor: GREEN_BORDER,
+  },
+  flowStepLabel: {
+    color: INK,
+    fontSize: 11,
+    fontWeight: '900',
+    lineHeight: 16,
+    marginTop: 7,
+    textAlign: 'center',
+  },
+  flowStepCaption: {
+    color: MUTED,
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  timelineLine: {
+    borderColor: '#D8DEE8',
+    borderStyle: 'dashed',
+    borderTopWidth: 2,
+    flex: 1,
+    marginHorizontal: -8,
+    marginTop: 23,
+  },
+  timelineLineComplete: {
+    borderColor: GREEN,
+    borderStyle: 'solid',
   },
   modalStatusRow: {
     flexDirection: 'row',
@@ -840,9 +2224,43 @@ const styles = StyleSheet.create({
     paddingTop: 13,
     marginTop: 13,
   },
+  subTaskFlowSection: {
+    borderTopColor: CARD_BORDER,
+    borderTopWidth: 1,
+    marginTop: 2,
+    paddingTop: 12,
+  },
+  subTaskFlowHeader: {
+    marginBottom: 7,
+  },
+  subTaskFlowHint: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginTop: -5,
+  },
+  subTaskFlowRow: {
+    flexDirection: 'row',
+  },
+  subTaskFlowRail: {
+    alignItems: 'center',
+    width: 32,
+  },
+  subTaskFlowLine: {
+    backgroundColor: '#DDE6EE',
+    flex: 1,
+    marginBottom: 4,
+    marginTop: 4,
+    width: 2,
+  },
+  subTaskFlowLineDone: {
+    backgroundColor: GREEN_BORDER,
+  },
   topMapSection: {
     borderTopColor: CARD_BORDER,
     borderTopWidth: 1,
+    marginTop: 13,
     paddingTop: 13,
   },
   modalSectionTitle: {
@@ -889,7 +2307,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: -12,
     top: 62,
-    transform: [{rotate: '-8deg'}],
+    transform: [{ rotate: '-8deg' }],
   },
   mapRoadVertical: {
     backgroundColor: '#FFFFFF',
@@ -897,7 +2315,7 @@ const styles = StyleSheet.create({
     left: 102,
     position: 'absolute',
     top: -20,
-    transform: [{rotate: '18deg'}],
+    transform: [{ rotate: '18deg' }],
     width: 24,
   },
   mapRoute: {
@@ -909,7 +2327,7 @@ const styles = StyleSheet.create({
     left: 42,
     position: 'absolute',
     top: 32,
-    transform: [{rotate: '-13deg'}],
+    transform: [{ rotate: '-13deg' }],
     width: 170,
   },
   mapMarker: {
@@ -953,23 +2371,427 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 21,
   },
+  cleanSection: {
+    marginBottom: 18,
+  },
+  cleanSectionTitle: {
+    color: INK,
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 20,
+    marginBottom: 9,
+  },
+  descriptionText: {
+    color: '#526079',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 20,
+  },
+  sectionTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  viewAllText: {
+    color: GREEN,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  subTaskList: {
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  subTaskListItem: {
+    alignItems: 'center',
+    borderBottomColor: CARD_BORDER,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    minHeight: 54,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  subTaskStatusButton: {
+    alignItems: 'center',
+    height: 28,
+    justifyContent: 'center',
+    marginRight: 10,
+    width: 28,
+  },
+  subTaskStatusCircle: {
+    borderColor: '#D5DCE7',
+    borderRadius: 11,
+    borderWidth: 2,
+    height: 22,
+    width: 22,
+  },
+  subTaskStatusCircleDone: {
+    alignItems: 'center',
+    backgroundColor: GREEN,
+    borderColor: GREEN,
+    justifyContent: 'center',
+  },
+  subTaskListCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  subTaskListTitle: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 17,
+  },
+  subTaskListMeta: {
+    color: MUTED,
+    fontSize: 10,
+    fontWeight: '700',
+    lineHeight: 14,
+    marginTop: 2,
+  },
+  subTaskStatePill: {
+    borderRadius: 7,
+    marginLeft: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  subTaskStateDone: {
+    backgroundColor: GREEN_SOFT,
+  },
+  subTaskStateActive: {
+    backgroundColor: '#EAF3FF',
+  },
+  subTaskStatePending: {
+    backgroundColor: '#F1F5F9',
+  },
+  subTaskStateText: {
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  subTaskStateDoneText: {
+    color: GREEN,
+  },
+  subTaskStateActiveText: {
+    color: BLUE,
+  },
+  subTaskStatePendingText: {
+    color: MUTED,
+  },
+  proofRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 5,
+  },
+  emptySubTaskBox: {
+    backgroundColor: '#F8FAFC',
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    padding: 11,
+  },
+  emptySubTaskText: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  detailGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 12,
+  },
+  detailGridItem: {
+    paddingRight: 12,
+    width: '50%',
+  },
+  detailGridLabel: {
+    color: '#53617B',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginBottom: 3,
+  },
+  detailGridValue: {
+    color: '#526079',
+    flexShrink: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+  },
+  locationValueRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+  },
+  attachmentRow: {
+    flexDirection: 'row',
+    gap: 9,
+  },
+  attachmentCard: {
+    alignItems: 'center',
+    borderColor: CARD_BORDER,
+    borderRadius: 9,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    minHeight: 52,
+    minWidth: 0,
+    paddingHorizontal: 8,
+  },
+  fileBadge: {
+    alignItems: 'center',
+    borderRadius: 4,
+    height: 26,
+    justifyContent: 'center',
+    marginRight: 7,
+    width: 26,
+  },
+  pdfBadge: {
+    backgroundColor: '#EF1F2D',
+  },
+  jpgBadge: {
+    backgroundColor: GREEN,
+  },
+  fileBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  attachmentCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  attachmentTitle: {
+    color: INK,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  attachmentMeta: {
+    color: '#526079',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  ownerPanel: {
+    marginBottom: 4,
+  },
+  ownerTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  lockedOwnerPill: {
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  lockedOwnerText: {
+    color: MUTED,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  ownerActionRow: {
+    flexDirection: 'row',
+    gap: 7,
+    marginTop: 7,
+  },
+  selfActionButton: {
+    alignItems: 'center',
+    backgroundColor: GREEN_SOFT,
+    borderColor: GREEN_BORDER,
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    minHeight: 34,
+    justifyContent: 'center',
+  },
+  selfActionText: {
+    color: GREEN,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  assignActionButton: {
+    alignItems: 'center',
+    backgroundColor: BLUE_SOFT,
+    borderColor: BLUE_BORDER,
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    minHeight: 34,
+    justifyContent: 'center',
+  },
+  assignActionText: {
+    color: BLUE,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  lockedActionButton: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
+  },
+  subTaskCard: {
+    backgroundColor: '#F8FAFC',
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    flex: 1,
+    marginBottom: 8,
+    padding: 10,
+  },
+  subTaskCardDone: {
+    backgroundColor: GREEN_SOFT,
+    borderColor: GREEN_BORDER,
+  },
+  subTaskHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 4,
+  },
+  subTaskIndex: {
+    alignItems: 'center',
+    backgroundColor: GREEN,
+    borderRadius: 14,
+    height: 28,
+    justifyContent: 'center',
+    width: 28,
+  },
+  subTaskIndexDone: {
+    backgroundColor: '#16A34A',
+  },
+  subTaskIndexText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  subTaskHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  subTaskTitle: {
+    color: INK,
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 20,
+  },
+  subTaskMeta: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  subTaskDescription: {
+    color: INK,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 17,
+    marginBottom: 4,
+  },
+  subTaskCompactInfo: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  compactOwnerRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 7,
+  },
+  mainTaskStep: {
+    minHeight: 58,
+    justifyContent: 'center',
+  },
+  compactInstructionText: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 19,
+    marginTop: 10,
+  },
+  proofButton: {
+    alignItems: 'center',
+    borderColor: GREEN_BORDER,
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 5,
+    justifyContent: 'center',
+    marginTop: 5,
+    minHeight: 30,
+    paddingHorizontal: 6,
+  },
+  proofButtonDone: {
+    backgroundColor: GREEN_SOFT,
+  },
+  proofButtonDisabled: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
+  },
+  proofButtonText: {
+    color: GREEN,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  proofButtonDoneText: {
+    color: GREEN,
+  },
+  proofButtonDisabledText: {
+    color: '#96A0AE',
+  },
+  completeSubTaskButton: {
+    alignItems: 'center',
+    backgroundColor: GREEN,
+    borderRadius: 9,
+    justifyContent: 'center',
+    marginTop: 7,
+    minHeight: 36,
+  },
+  completeSubTaskText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  completedSubTaskBadge: {
+    alignItems: 'center',
+    backgroundColor: GREEN_SOFT,
+    borderColor: GREEN_BORDER,
+    borderRadius: 9,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    justifyContent: 'center',
+    marginTop: 10,
+    minHeight: 38,
+  },
+  completedSubTaskText: {
+    color: GREEN,
+    fontSize: 13,
+    fontWeight: '900',
+  },
   dropdownLabel: {
     color: MUTED,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '800',
-    marginBottom: 6,
-    marginTop: 10,
+    marginBottom: 5,
+    marginTop: 8,
   },
   dropdownButton: {
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderColor: CARD_BORDER,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
     flexDirection: 'row',
-    height: 40,
+    height: 36,
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
   },
   dropdownButtonDisabled: {
     backgroundColor: '#F1F5F9',
@@ -981,15 +2803,15 @@ const styles = StyleSheet.create({
   },
   dropdownValueText: {
     color: INK,
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '900',
   },
   dropdownList: {
     backgroundColor: '#FFFFFF',
     borderColor: CARD_BORDER,
-    borderRadius: 10,
+    borderRadius: 8,
     borderWidth: 1,
-    marginTop: 6,
+    marginTop: 5,
     overflow: 'hidden',
   },
   dropdownItem: {
@@ -998,12 +2820,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: 36,
-    paddingHorizontal: 12,
+    minHeight: 32,
+    paddingHorizontal: 10,
   },
   dropdownItemText: {
     color: INK,
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
   },
   modalActions: {
@@ -1012,7 +2834,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     flexDirection: 'row',
     gap: 10,
-    padding: 14,
+    padding: 12,
   },
   secondaryAction: {
     alignItems: 'center',
@@ -1040,9 +2862,96 @@ const styles = StyleSheet.create({
   pendingAction: {
     backgroundColor: '#64748B',
   },
+  blockedAction: {
+    backgroundColor: '#94A3B8',
+    borderColor: '#94A3B8',
+  },
+  progressAction: {
+    alignItems: 'center',
+    backgroundColor: GREEN,
+    borderRadius: 7,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 7,
+    height: 42,
+    justifyContent: 'center',
+  },
+  progressActionText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  completeAction: {
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderColor: GREEN,
+    borderRadius: 7,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 7,
+    height: 42,
+    justifyContent: 'center',
+  },
+  completeActionText: {
+    color: GREEN,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  blockedCompleteText: {
+    color: '#FFFFFF',
+  },
+  blockedOutlineAction: {
+    backgroundColor: '#F8FAFC',
+    borderColor: CARD_BORDER,
+    borderWidth: 1,
+  },
+  blockedOutlineText: {
+    color: MUTED,
+  },
   primaryActionText: {
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '900',
   },
+  visitTimePill: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3, marginLeft: 'auto' as const },
+  visitTimePillText: { fontSize: 11, fontWeight: '700' as const },
+  visitFooterRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  visitPill: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: '#F1F5F9', borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
+  visitPillText: { color: MUTED, fontSize: 11, fontWeight: '700' as const },
+  itemCheckRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 11 },
+  itemCheckbox: { padding: 2 },
+  itemName: { color: INK, fontSize: 13, fontWeight: '800' as const },
+  itemExpected: { color: MUTED, fontSize: 11, fontWeight: '600' as const, marginTop: 1 },
+  itemCountWrap: { alignItems: 'center' as const },
+  itemCountLabel: { color: RED, fontSize: 10, fontWeight: '700' as const, marginBottom: 2 },
+  itemCountInput: {
+    borderWidth: 1, borderColor: RED_BORDER, borderRadius: 6,
+    width: 52, height: 30, textAlign: 'center' as const,
+    color: INK, fontWeight: '800' as const, fontSize: 13,
+  },
+  yesNoRow: { flexDirection: 'row', gap: 6 },
+  yesNoBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 7, borderWidth: 1, borderColor: CARD_BORDER, backgroundColor: '#F8FAFC' },
+  yesNoBtnYes: { backgroundColor: GREEN_SOFT, borderColor: GREEN_BORDER },
+  yesNoBtnNo: { backgroundColor: RED_SOFT, borderColor: RED_BORDER },
+  yesNoText: { color: MUTED, fontSize: 12, fontWeight: '800' as const },
+  yesNoPillRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
+  yesNoPill: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 12, borderRadius: 10, borderWidth: 1, borderColor: CARD_BORDER, backgroundColor: '#F8FAFC' },
+  yesNoPillYes: { backgroundColor: GREEN, borderColor: GREEN },
+  yesNoPillNo: { backgroundColor: RED, borderColor: RED },
+  yesNoPillText: { color: MUTED, fontSize: 13, fontWeight: '800' as const },
+  yesNoPillTextActive: { color: '#FFFFFF' },
+  fvSubId: { color: MUTED, fontSize: 12, fontWeight: '600', marginTop: 1 },
+  vdDetailCard: {
+    backgroundColor: '#F7F9FC',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  vdRow: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 11 },
+  vdRowBorder: { borderBottomWidth: 1, borderBottomColor: CARD_BORDER },
+  vdLabel: { color: MUTED, fontSize: 12, fontWeight: '600', width: 64 },
+  vdValue: { color: INK, fontSize: 13, fontWeight: '700', flex: 1 },
 });

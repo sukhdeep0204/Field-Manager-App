@@ -3,7 +3,7 @@ module.exports = {
   testPathIgnorePatterns: ['/node_modules/', '/android/', '/ios/'],
   testEnvironment: 'node',
   transformIgnorePatterns: [
-    'node_modules/(?!(react-native|@react-native|@react-native-community|@react-navigation)/)',
+    'node_modules/(?!(react-native|@react-native|@react-native-community|@react-navigation|react-native-gesture-handler|react-native-linear-gradient|react-native-safe-area-context|react-native-screens|react-native-svg|lucide-react-native)/)',
   ],
-  setupFiles: ['<rootDir>/node_modules/@react-native-async-storage/async-storage/jest/async-storage-mock.js'],
+  setupFiles: ['<rootDir>/jest.setup.js'],
 };

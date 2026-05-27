@@ -17,6 +17,7 @@ import Icon from '../components/Icon';
 import {useLanguage} from '../context/LanguageContext';
 
 const AVATAR = require('../assets/rahul-sharma-avatar.png');
+const LOGO_3F = require('../assets/logo-3f.png');
 
 const INK = '#070B1A';
 const MUTED = '#43506F';
@@ -68,16 +69,20 @@ export default function HomeScreen() {
   const summaryItems = [
     {
       icon: 'ClipboardList',
-      label: t('pendingTasks'),
-      count: '7',
+      label: 'Highest priority task due',
+      title: 'Land Verification',
+      detail: 'FM-10024 • Bori, Durg',
+      meta: 'Due today, 05:00 PM',
       color: ORANGE,
       bg: ORANGE_SOFT,
       route: 'Tasks',
     },
     {
       icon: 'MapPinned',
-      label: t('pendingFieldVisits'),
-      count: '4',
+      label: 'Next field visit',
+      title: 'Mahesh Sahu Farm',
+      detail: 'Insecticide Spray • FM-10035',
+      meta: 'Bori field shed, 07:00 PM',
       color: BLUE,
       bg: BLUE_SOFT,
       route: 'Lands',
@@ -109,6 +114,7 @@ export default function HomeScreen() {
       <RaiseRequestScreen
         bottomInset={insets.bottom}
         topInset={insets.top}
+        initialRequestType={t('repair')}
         onBack={() => setTicketOpen(false)}
       />
     );
@@ -157,8 +163,19 @@ export default function HomeScreen() {
         </View>
 
         <View style={styles.attendanceCard}>
+          <View pointerEvents="none" style={styles.attendanceCloudOne} />
+          <View pointerEvents="none" style={styles.attendanceCloudTwo} />
+          <View pointerEvents="none" style={styles.attendanceHillBack} />
+          <View pointerEvents="none" style={styles.attendanceHillFront} />
+          <View pointerEvents="none" style={styles.attendanceFarmScene}>
+            <View style={styles.farmTree} />
+            <View style={styles.farmHouse}>
+              <View style={styles.farmRoof} />
+            </View>
+            <View style={styles.farmSilo} />
+          </View>
           <View style={styles.attendanceHeader}>
-            <Text style={styles.attendanceLabel}>{t('selfAttendance')}</Text>
+            <Text style={styles.attendanceLabel}>{t('selfAttendance').toUpperCase()}</Text>
             <TouchableOpacity
               activeOpacity={0.75}
               onPress={() => setAttendanceCalendarOpen(true)}
@@ -171,11 +188,21 @@ export default function HomeScreen() {
               <View style={styles.statusContent}>
                 <View style={styles.checkHalo}>
                   <View style={styles.checkRing}>
-                    <LinearGradient
-                      colors={isCheckedIn ? ['#00A63A', '#007A27'] : ['#EF4444', '#B91C1C']}
-                      style={styles.checkCircle}>
-                      <Icon name={isCheckedIn ? 'Check' : 'X'} size={24} color="#FFFFFF" />
-                    </LinearGradient>
+                    <View
+                      style={[
+                        styles.checkCircle,
+                        !isCheckedIn && styles.checkedOutCircle,
+                      ]}>
+                      {isCheckedIn ? (
+                        <Image
+                          source={LOGO_3F}
+                          resizeMode="contain"
+                          style={styles.attendanceLogo}
+                        />
+                      ) : (
+                        <Icon name="X" size={24} color="#FFFFFF" />
+                      )}
+                    </View>
                   </View>
                 </View>
                 <View style={styles.statusTextBlock}>
@@ -186,7 +213,10 @@ export default function HomeScreen() {
                     <Icon name="MapPin" size={15} color={MUTED} />
                     <Text style={styles.locationText}>Bori, Durg, Chhattisgarh</Text>
                   </View>
-                  <Text style={styles.dateText}>{t('todayDate')}</Text>
+                  <View style={styles.dateRow}>
+                    <Icon name="CalendarDays" size={15} color={MUTED} />
+                    <Text style={styles.dateText}>{t('todayDate')}</Text>
+                  </View>
                 </View>
               </View>
             </View>
@@ -213,11 +243,7 @@ export default function HomeScreen() {
 
           <TouchableOpacity activeOpacity={0.85} onPress={handleCheckout}>
             <LinearGradient
-              colors={
-                isCheckedIn
-                  ? ['#DC2626', '#EF4444', '#B91C1C']
-                  : ['#00712E', '#008B38', '#006D2B']
-              }
+              colors={['#00A93A', '#009C35', '#007D2C']}
               start={{x: 0, y: 0.5}}
               end={{x: 1, y: 0.5}}
               style={styles.checkoutButton}>
@@ -253,10 +279,16 @@ export default function HomeScreen() {
               <View style={[styles.summaryIconWrap, {backgroundColor: item.bg}]}>
                 <Icon name={item.icon} size={22} color={item.color} />
               </View>
-              <Text style={styles.summaryLabel}>{item.label}</Text>
-              <Text style={[styles.summaryCount, {color: item.color}]}>
-                {item.count}
-              </Text>
+              <View style={styles.summaryCopy}>
+                <Text style={styles.summaryLabel}>{item.label}</Text>
+                <Text style={styles.summaryTitle}>{item.title}</Text>
+                <Text style={styles.summaryDetail}>{item.detail}</Text>
+              </View>
+              <View style={styles.summaryMetaPill}>
+                <Text style={[styles.summaryMetaText, {color: item.color}]}>
+                  {item.meta}
+                </Text>
+              </View>
               <Icon name="ChevronRight" size={21} color={MUTED} />
             </TouchableOpacity>
           ))}
@@ -311,6 +343,7 @@ export default function HomeScreen() {
               <Text style={styles.quickCardTitle} numberOfLines={1}>{t('applyLeave')}</Text>
             </View>
           </TouchableOpacity>
+
         </View>
       </ScrollView>
 
@@ -1272,16 +1305,18 @@ const REIMBURSEMENT_CLAIMS = [
 
 function RaiseRequestScreen({
   bottomInset,
+  initialRequestType,
   topInset,
   onBack,
 }: {
   bottomInset: number;
+  initialRequestType?: string;
   topInset: number;
   onBack: () => void;
 }) {
   const {t} = useLanguage();
   const [requestTypeOpen, setRequestTypeOpen] = useState(false);
-  const [selectedType, setSelectedType] = useState(t('repair'));
+  const [selectedType, setSelectedType] = useState(initialRequestType ?? t('repair'));
   const [landOpen, setLandOpen] = useState(false);
   const [selectedLand, setSelectedLand] = useState('FM-10024 - Bori, Durg');
   const [priorityOpen, setPriorityOpen] = useState(false);
@@ -1289,6 +1324,7 @@ function RaiseRequestScreen({
   const [showMyRequests, setShowMyRequests] = useState(false);
   const requestTypes = [
     t('repair'),
+    t('equipmentMaterial'),
     t('mishappening'),
     t('insectAttack'),
     t('fungusBacteriaInfection'),
@@ -2313,7 +2349,7 @@ const calStyles = StyleSheet.create({
   },
   sheet: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 15,
     paddingBottom: 12,
     paddingHorizontal: 16,
     paddingTop: 20,
@@ -2477,49 +2513,139 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   attendanceCard: {
-    backgroundColor: '#FAFFFB',
-    borderColor: GREEN_BORDER,
-    borderRadius: 14,
+    backgroundColor: '#F7FFF8',
+    borderColor: '#CFEFDA',
+    borderRadius: 16,
     borderWidth: 1,
-    marginBottom: 32,
-    paddingBottom: 15,
-    paddingHorizontal: 14,
-    paddingTop: 23,
+    marginBottom: 24,
+    overflow: 'hidden',
+    paddingBottom: 12,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    position: 'relative',
     shadowColor: '#0B3019',
     shadowOffset: {width: 0, height: 12},
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
+    shadowOpacity: 0.07,
+    shadowRadius: 20,
+  },
+  attendanceCloudOne: {
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    borderRadius: 34,
+    height: 40,
+    position: 'absolute',
+    right: 50,
+    top: 14,
+    width: 88,
+  },
+  attendanceCloudTwo: {
+    backgroundColor: 'rgba(255, 255, 255, 0.56)',
+    borderRadius: 36,
+    height: 54,
+    position: 'absolute',
+    right: -12,
+    top: 56,
+    width: 110,
+  },
+  attendanceHillBack: {
+    backgroundColor: '#DDF5CF',
+    borderTopLeftRadius: 130,
+    borderTopRightRadius: 170,
+    bottom: 54,
+    height: 44,
+    left: -36,
+    opacity: 0.95,
+    position: 'absolute',
+    right: -24,
+    transform: [{rotate: '-3deg'}],
+  },
+  attendanceHillFront: {
+    backgroundColor: '#C7EFB8',
+    borderTopLeftRadius: 170,
+    borderTopRightRadius: 120,
+    bottom: 34,
+    height: 48,
+    left: -48,
+    opacity: 0.82,
+    position: 'absolute',
+    right: -42,
+    transform: [{rotate: '4deg'}],
+  },
+  attendanceFarmScene: {
+    alignItems: 'flex-end',
+    bottom: 58,
+    flexDirection: 'row',
+    height: 38,
+    position: 'absolute',
+    right: 18,
+    width: 96,
+  },
+  farmTree: {
+    backgroundColor: '#79C989',
+    borderRadius: 14,
+    height: 22,
+    marginRight: 5,
+    width: 14,
+  },
+  farmHouse: {
+    backgroundColor: '#FAF4E5',
+    borderColor: '#9FCB98',
+    borderRadius: 3,
+    borderWidth: 1,
+    height: 20,
+    marginRight: 5,
+    width: 29,
+  },
+  farmRoof: {
+    backgroundColor: '#A7CFA0',
+    height: 8,
+    left: -3,
+    position: 'absolute',
+    right: -3,
+    top: -7,
+    transform: [{rotate: '12deg'}],
+  },
+  farmSilo: {
+    backgroundColor: '#94CBA6',
+    borderRadius: 6,
+    height: 32,
+    width: 11,
   },
   attendanceHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginBottom: 17,
+    marginBottom: 13,
+    zIndex: 1,
   },
   attendanceLabel: {
     color: GREEN,
-    fontSize: 15,
-    fontWeight: '800',
-    lineHeight: 20,
+    fontSize: 14,
+    fontWeight: '900',
+    lineHeight: 18,
   },
   calendarButton: {
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderColor: GREEN_BORDER,
-    borderRadius: 10,
+    borderRadius: 11,
     borderWidth: 1,
-    height: 34,
+    height: 38,
     justifyContent: 'center',
-    width: 34,
+    shadowColor: '#0B3019',
+    shadowOffset: {width: 0, height: 8},
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    width: 38,
   },
   attendanceMain: {
     flexDirection: 'row',
-    marginBottom: 15,
+    marginBottom: 13,
+    zIndex: 1,
   },
   statusColumn: {
     flex: 1,
     justifyContent: 'center',
-    paddingRight: 13,
+    paddingRight: 8,
   },
   statusContent: {
     alignItems: 'center',
@@ -2527,27 +2653,42 @@ const styles = StyleSheet.create({
   },
   checkHalo: {
     alignItems: 'center',
-    backgroundColor: '#E8F8EE',
-    borderRadius: 34,
-    height: 68,
-    justifyContent: 'center',
-    marginRight: 11,
-    width: 68,
-  },
-  checkRing: {
-    alignItems: 'center',
-    backgroundColor: '#D2F0DB',
+    backgroundColor: 'transparent',
     borderRadius: 27,
     height: 54,
     justifyContent: 'center',
+    marginRight: 10,
     width: 54,
+  },
+  checkRing: {
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+    borderRadius: 25,
+    height: 50,
+    justifyContent: 'center',
+    width: 50,
   },
   checkCircle: {
     alignItems: 'center',
-    borderRadius: 22,
-    height: 44,
+    backgroundColor: '#FFFFFF',
+    borderColor: GREEN_BORDER,
+    borderWidth: 1,
+    borderRadius: 23,
+    height: 46,
     justifyContent: 'center',
-    width: 44,
+    shadowColor: GREEN,
+    shadowOffset: {width: 0, height: 8},
+    shadowOpacity: 0.24,
+    shadowRadius: 10,
+    width: 46,
+  },
+  checkedOutCircle: {
+    backgroundColor: '#DC2626',
+    borderColor: '#DC2626',
+  },
+  attendanceLogo: {
+    height: 38,
+    width: 38,
   },
   statusTextBlock: {
     flex: 1,
@@ -2556,9 +2697,9 @@ const styles = StyleSheet.create({
   checkedIn: {
     color: GREEN,
     fontSize: 22,
-    fontWeight: '800',
-    lineHeight: 28,
-    marginBottom: 13,
+    fontWeight: '900',
+    lineHeight: 26,
+    marginBottom: 11,
   },
   checkedOut: {
     color: '#DC2626',
@@ -2567,63 +2708,67 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 6,
-    marginBottom: 7,
+    marginBottom: 8,
   },
   locationText: {
     color: MUTED,
     flex: 1,
-    fontSize: 15,
-    fontWeight: '700',
-    lineHeight: 20,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  dateRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
   },
   dateText: {
     color: MUTED,
-    fontSize: 15,
-    fontWeight: '700',
-    lineHeight: 20,
-    paddingLeft: 21,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 16,
   },
   divider: {
-    backgroundColor: '#CFE5D5',
-    marginVertical: 10,
+    backgroundColor: '#DCE8E0',
+    marginVertical: 3,
     width: 1,
   },
   timeColumn: {
     justifyContent: 'center',
-    paddingLeft: 21,
-    width: 132,
+    paddingLeft: 16,
+    width: 118,
   },
   timeLabel: {
     color: MUTED,
-    fontSize: 15,
-    fontWeight: '700',
-    lineHeight: 20,
-    marginBottom: 12,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 15,
+    marginBottom: 5,
   },
   timeRow: {
     alignItems: 'flex-end',
     flexDirection: 'row',
-    marginBottom: 12,
+    marginBottom: 6,
   },
   time: {
     color: INK,
-    fontSize: 32,
+    fontSize: 30,
     fontWeight: '900',
-    lineHeight: 38,
+    lineHeight: 34,
   },
   ampm: {
     color: INK,
-    fontSize: 16,
+    fontSize: 12,
     fontWeight: '800',
-    lineHeight: 25,
+    lineHeight: 19,
     marginLeft: 5,
   },
   durationLabel: {
     color: MUTED,
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 19,
-    marginBottom: 8,
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 15,
+    marginBottom: 5,
   },
   durationPill: {
     alignItems: 'center',
@@ -2632,28 +2777,33 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 7,
-    height: 32,
+    gap: 5,
+    height: 29,
     justifyContent: 'center',
-    width: 92,
+    width: 88,
   },
   durationText: {
     color: GREEN,
-    fontSize: 15,
-    fontWeight: '800',
+    fontSize: 12,
+    fontWeight: '900',
   },
   checkoutButton: {
     alignItems: 'center',
     borderRadius: 8,
     flexDirection: 'row',
-    gap: 12,
-    height: 43,
+    gap: 10,
+    height: 45,
     justifyContent: 'center',
+    shadowColor: GREEN,
+    shadowOffset: {width: 0, height: 10},
+    shadowOpacity: 0.2,
+    shadowRadius: 14,
+    zIndex: 1,
   },
   checkoutText: {
     color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   modalBackdrop: {
     alignItems: 'center',
@@ -2855,7 +3005,8 @@ const styles = StyleSheet.create({
   summaryRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    minHeight: 48,
+    minHeight: 76,
+    paddingVertical: 10,
   },
   summaryBorder: {
     borderBottomColor: CARD_BORDER,
@@ -2866,20 +3017,49 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     height: 34,
     justifyContent: 'center',
-    marginRight: 18,
+    marginRight: 12,
     width: 34,
   },
-  summaryLabel: {
-    color: INK,
+  summaryCopy: {
     flex: 1,
-    fontSize: 15,
+    minWidth: 0,
+  },
+  summaryLabel: {
+    color: MUTED,
+    fontSize: 11,
     fontWeight: '800',
+    lineHeight: 15,
+    marginBottom: 2,
+    textTransform: 'uppercase',
+  },
+  summaryTitle: {
+    color: INK,
+    fontSize: 15,
+    fontWeight: '900',
     lineHeight: 20,
   },
-  summaryCount: {
-    fontSize: 20,
+  summaryDetail: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: 1,
+  },
+  summaryMetaPill: {
+    backgroundColor: '#F8FAFC',
+    borderColor: CARD_BORDER,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginLeft: 10,
+    maxWidth: 104,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  summaryMetaText: {
+    fontSize: 11,
     fontWeight: '900',
-    marginHorizontal: 15,
+    lineHeight: 14,
+    textAlign: 'center',
   },
   quickTitle: {
     color: INK,

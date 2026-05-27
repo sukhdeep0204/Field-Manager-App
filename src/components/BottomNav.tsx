@@ -6,6 +6,7 @@ import {useLanguage} from '../context/LanguageContext';
 
 const GREEN = '#078B36';
 const INK = '#43506F';
+const PENDING_TASK_COUNT = 3;
 
 export default function BottomNav({state, navigation}: any) {
   const insets = useSafeAreaInsets();
@@ -24,7 +25,18 @@ export default function BottomNav({state, navigation}: any) {
               activeOpacity={0.78}
               onPress={() => navigation.navigate(route.name)}
               style={[styles.item, focused && styles.activeItem]}>
-              <Icon name={iconName} size={focused ? 26 : 24} color={focused ? GREEN : INK} />
+              <View style={styles.iconWrap}>
+                <Icon
+                  name={iconName}
+                  size={focused ? 26 : 24}
+                  color={focused ? GREEN : INK}
+                />
+                {route.name === 'Tasks' && PENDING_TASK_COUNT > 0 ? (
+                  <View style={styles.taskBadge}>
+                    <Text style={styles.taskBadgeText}>{PENDING_TASK_COUNT}</Text>
+                  </View>
+                ) : null}
+              </View>
               <Text style={[styles.label, focused && styles.activeLabel]}>
                 {mapLabel(route.name, t)}
               </Text>
@@ -103,6 +115,31 @@ const styles = StyleSheet.create({
   activeItem: {
     backgroundColor: '#EEF9F1',
     width: 64,
+  },
+  iconWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  taskBadge: {
+    alignItems: 'center',
+    backgroundColor: '#EF4444',
+    borderColor: '#FFFFFF',
+    borderRadius: 9,
+    borderWidth: 1.5,
+    height: 18,
+    justifyContent: 'center',
+    minWidth: 18,
+    paddingHorizontal: 4,
+    position: 'absolute',
+    right: -10,
+    top: -7,
+  },
+  taskBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+    lineHeight: 12,
   },
   label: {
     color: INK,
