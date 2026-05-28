@@ -19,7 +19,13 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Icon from '../components/Icon';
 import {useLanguage} from '../context/LanguageContext';
 import {type StaffProfile} from '../auth/session';
+import Geolocation from '@react-native-community/geolocation';
 import {API_BASE_URL} from '../config';
+
+Geolocation.setRNConfiguration({
+  skipPermissionRequests: true,
+  authorizationLevel: 'whenInUse',
+});
 
 const AVATAR = require('../assets/rahul-sharma-avatar.png');
 const LOGO_3F = require('../assets/logo-3f.png');
@@ -44,7 +50,7 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const {t} = useLanguage();
-  const [isCheckedIn, setIsCheckedIn] = useState(true);
+  const [isCheckedIn, setIsCheckedIn] = useState(false);
   const [currentLocation, setCurrentLocation] = useState('Bori, Durg, Chhattisgarh');
   const [attendanceCalendarOpen, setAttendanceCalendarOpen] = useState(false);
   const [vehicleLogOpen, setVehicleLogOpen] = useState(false);
@@ -77,23 +83,18 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
 
   const getCurrentCoordinates = () =>
     new Promise<{lat: number; long: number} | null>(resolve => {
-      const geolocation = (globalThis as any)?.navigator?.geolocation;
-      if (!geolocation?.getCurrentPosition) {
-        resolve(null);
-        return;
-      }
-      geolocation.getCurrentPosition(
-        (position: any) => {
+      Geolocation.getCurrentPosition(
+        position => {
           const lat = Number(position?.coords?.latitude);
           const long = Number(position?.coords?.longitude);
           if (Number.isFinite(lat) && Number.isFinite(long)) {
             resolve({lat, long});
-            return;
+          } else {
+            resolve(null);
           }
-          resolve(null);
         },
         () => resolve(null),
-        {enableHighAccuracy: true, timeout: 15000, maximumAge: 0},
+        {enableHighAccuracy: false, timeout: 10000, maximumAge: 120000},
       );
     });
 
@@ -156,7 +157,7 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
     }, 2000);
     uploadTraceTimer.current = setInterval(() => {
       uploadTraceBatch();
-    }, 60000);
+    }, 10000);
   };
 
   const stopLocationTracking = async () => {
