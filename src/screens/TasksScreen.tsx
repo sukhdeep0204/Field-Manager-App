@@ -1,6 +1,9 @@
 import {
   Alert,
+  Image,
+  Linking,
   Modal,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,8 +13,11 @@ import {
 } from 'react-native';
 import { useEffect, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {Camera, CameraType, type CameraApi} from 'react-native-camera-kit';
 import Icon from '../components/Icon';
 import { useLanguage } from '../context/LanguageContext';
+import {API_BASE_URL} from '../config';
+import {loadSession, type FarmDetail} from '../auth/session';
 
 const INK = '#070B1A';
 const MUTED = '#43506F';
@@ -28,17 +34,69 @@ const ORANGE_TEXT = '#EA580C';
 const CARD_BORDER = '#E6ECF2';
 
 type Task = {
+  taskId?: string;
+  calanderId?: string;
   title: string;
   farmId: string;
   location: string;
   farmerName: string;
   dueTime: string;
+  assignedAcres?: string;
+  vehicles?: Array<{
+    vehicle_id: string;
+    vehicle_number: string;
+  }>;
+  equipment?: Array<{
+    equipment_name: string;
+    quantity: number;
+  }>;
+  equipmentOtp?: string;
+  transportCoordinationStatus?: string;
+  equipmentCoordinationStatus?: string;
   description: string;
   assignedTo: string;
   priority: string;
   status: string;
   allocation: string;
   subTasks?: SubTask[];
+};
+
+type ApiTask = {
+  equipment_otp?: string;
+  calander_id?: string;
+  trasport_coordination_status?: string;
+  transport_coordination_status?: string;
+  equipment_coordination_status?: string;
+  task_id: string;
+  feild_id: string[];
+  farmer_name: string;
+  assigned_acres: Array<{
+    date: string;
+    activity: string;
+    assigned_acres: number;
+    farm_id: string;
+  }>;
+  status: {
+    feild_manager_status: string;
+    farmer_status: string;
+    supervisor_status: string;
+  };
+  vehicles: Array<{
+    vehicle_id: string;
+    vehicle_number: string;
+  }>;
+  equipment: Array<{
+    equipment_name: string;
+    equipment_id: string;
+    quantity: number;
+  }>;
+};
+
+type TransportVehicle = {
+  vehicle_number: string;
+  vehicle_model: string;
+  driver_contact: string;
+  driver_name: string;
 };
 
 type SubTask = {
@@ -79,20 +137,74 @@ export default function TasksScreen() {
     Record<string, string>
   >({});
   const [selectedVisit, setSelectedVisit] = useState<typeof UPCOMING_FIELD_VISITS[number] | null>(null);
+  const [apiTasks, setApiTasks] = useState<Task[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const visibleGroups =
+  const fetchTasks = async () => {
+    try {
+      const session = await loadSession();
+      const farmIds = session?.farmAccess?.farm_ids ?? [];
+      const farmDetails = session?.farmDetails ?? [];
+      if (!farmIds.length) {
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/feild_manager/get_all_tasks`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({farm_id: farmIds}),
+      });
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data?.tasks)) {
+        return;
+      }
+
+      setApiTasks(mapApiTasksToUi(data.tasks as ApiTask[], farmDetails));
+    } catch {
+      // keep mock fallback
+    }
+  };
+
+  useEffect(() => {
+    fetchTasks();
+  }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await fetchTasks();
+    setRefreshing(false);
+  };
+
+  const taskSource = apiTasks.length ? apiTasks : flattenGroups(TASK_GROUPS);
+  const assignedTasks = taskSource.filter(
+    task => task.status.toLowerCase() === 'assigned' || task.status.toLowerCase() === 'in progress',
+  );
+  const pendingTasks = taskSource.filter(
+    task => task.status.toLowerCase() === 'pending' || task.status.toLowerCase() === 'work pending',
+  );
+  const completedTasks = taskSource.filter(task => task.status.toLowerCase() === 'completed');
+
+  const visibleTasks =
     activeTab === 'assigned'
-      ? TASK_GROUPS
+      ? assignedTasks
       : activeTab === 'pending'
-      ? PENDING_GROUPS
-      : [];
-  const assignedTaskCount = getTaskCount(TASK_GROUPS);
-  const pendingTaskCount = getTaskCount(PENDING_GROUPS);
+      ? pendingTasks
+      : completedTasks;
+  const assignedTaskCount = assignedTasks.length;
+  const pendingTaskCount = pendingTasks.length;
 
   return (
     <View style={styles.root}>
       <ScrollView
         style={styles.scroll}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={GREEN}
+            colors={[GREEN]}
+          />
+        }
         contentContainerStyle={[
           styles.content,
           { paddingTop: insets.top + 18, paddingBottom: insets.bottom + 112 },
@@ -184,39 +296,21 @@ export default function TasksScreen() {
               </TouchableOpacity>
             </View>
 
-            {activeTab !== 'completed' ? (
-              visibleGroups.map(group => (
-                <View key={group.title} style={styles.group}>
-                  <Text style={[styles.groupTitle, { color: group.color }]}>
-                    {getGroupTitle(group.title, t)}
-                  </Text>
-                  {group.tasks.map(task => (
-                    <TaskCard
-                      key={task.farmId}
-                      task={task}
-                      color={group.color}
-                      cardBg={group.cardBg}
-                      borderColor={group.borderColor}
-                      onPress={() => setSelectedTask(task)}
-                    />
-                  ))}
-                </View>
-              ))
-            ) : (
-              <View style={styles.group}>
-                <Text style={[styles.groupTitle, { color: GREEN }]}>{t('completed')} (2)</Text>
-                {COMPLETED_TASKS.map(task => (
-                  <TaskCard
-                    key={task.farmId}
-                    task={task}
-                    color={GREEN}
-                    cardBg={GREEN_SOFT}
-                    borderColor={GREEN_BORDER}
-                    onPress={() => setSelectedTask(task)}
-                  />
-                ))}
-              </View>
-            )}
+            <View style={styles.group}>
+              <Text style={[styles.groupTitle, { color: activeTab === 'completed' ? GREEN : ORANGE_TEXT }]}>
+                {activeTab === 'completed' ? t('completed') : activeTab === 'pending' ? t('pending') : t('assigned')}
+              </Text>
+              {visibleTasks.map(task => (
+                <TaskCard
+                  key={`${task.farmId}-${task.dueTime}-${task.title}`}
+                  task={task}
+                  color={activeTab === 'completed' ? GREEN : activeTab === 'pending' ? ORANGE_TEXT : BLUE}
+                  cardBg={activeTab === 'completed' ? GREEN_SOFT : activeTab === 'pending' ? '#FFF7ED' : BLUE_SOFT}
+                  borderColor={activeTab === 'completed' ? GREEN_BORDER : activeTab === 'pending' ? '#FED7AA' : BLUE_BORDER}
+                  onPress={() => setSelectedTask(task)}
+                />
+              ))}
+            </View>
           </>
         ) : (
           <>
@@ -297,18 +391,6 @@ export default function TasksScreen() {
             : null
         }
         onClose={() => setSelectedTask(null)}
-        onAssign={member => {
-          Alert.alert(
-            t('taskAllocation'),
-            `${selectedTask?.title} - ${member}`,
-          );
-        }}
-        onStart={task => {
-          setStatusOverrides(current => ({
-            ...current,
-            [task.farmId]: 'Work Pending',
-          }));
-        }}
       />
     </View>
   );
@@ -327,10 +409,15 @@ function TaskCard({
   borderColor: string;
   onPress: () => void;
 }) {
-  const { language, t } = useLanguage();
-  const prerequisiteCount =
-    task.subTasks?.filter(subTask => !isMainTaskSubTask(task, subTask))
-      .length ?? 0;
+  const { language } = useLanguage();
+  const [subTaskOwners, setSubTaskOwners] = useState<Record<string, string>>(
+    {},
+  );
+  const [pickupProofs, setPickupProofs] = useState<Record<string, boolean>>({});
+  const [dropProofs, setDropProofs] = useState<Record<string, boolean>>({});
+  const [completedSubTasks, setCompletedSubTasks] = useState<
+    Record<string, boolean>
+  >({});
 
   return (
     <TouchableOpacity
@@ -343,22 +430,11 @@ function TaskCard({
         <Text style={styles.taskTitle}>
           {translateTaskText(task.title, language)}
         </Text>
-        <DetailRow label={t('farmId')} value={task.farmId} />
-        <DetailRow label={t('location')} value={task.location} />
-        <DetailRow label={t('farmerName')} value={task.farmerName} />
-        <DetailRow
-          label={t('dueTime')}
-          value={task.dueTime}
-          valueColor={color}
-        />
-        {prerequisiteCount ? (
-          <View style={styles.subTaskCountPill}>
-            <Icon name="ListChecks" size={14} color={GREEN} />
-            <Text style={styles.subTaskCountText}>
-              {prerequisiteCount} sub task{prerequisiteCount > 1 ? 's' : ''}
-            </Text>
-          </View>
-        ) : null}
+        <DetailRow label="Farm ID" value={task.farmId} />
+        <DetailRow label="Location" value={task.location} />
+        <DetailRow label="Farmer's name" value={task.farmerName} />
+        <DetailRow label="Due date" value={task.dueTime} valueColor={color} />
+        <DetailRow label="Assigned acres" value={task.assignedAcres ?? '-'} />
       </View>
     </TouchableOpacity>
   );
@@ -367,45 +443,48 @@ function TaskCard({
 function TaskDetailModal({
   task,
   onClose,
-  onAssign,
-  onStart,
 }: {
   task: Task | null;
   onClose: () => void;
-  onAssign: (member: string) => void;
-  onStart: (task: Task) => void;
 }) {
-  const { language, t } = useLanguage();
-  const [staffDropdownOpen, setStaffDropdownOpen] = useState(false);
-  const [selectedStaff, setSelectedStaff] = useState('Rahul');
-  const [mainOwner, setMainOwner] = useState(
-    task?.assignedTo ?? 'Rahul Sharma',
-  );
-  const [ownerLocked, setOwnerLocked] = useState(false);
-  const [subTaskOwners, setSubTaskOwners] = useState<Record<string, string>>(
-    {},
-  );
-  const [pickupProofs, setPickupProofs] = useState<Record<string, boolean>>({});
-  const [dropProofs, setDropProofs] = useState<Record<string, boolean>>({});
-  const [completedSubTasks, setCompletedSubTasks] = useState<
-    Record<string, boolean>
-  >({});
+  const { language } = useLanguage();
+  const [transportDone, setTransportDone] = useState(false);
+  const [equipmentDone, setEquipmentDone] = useState(false);
+  const [equipmentReceiptAttached, setEquipmentReceiptAttached] = useState(false);
+  const [equipmentImageUrl, setEquipmentImageUrl] = useState('');
+  const [uploadingEquipmentImage, setUploadingEquipmentImage] = useState(false);
+  const [completedAcres, setCompletedAcres] = useState('');
+  const [taskPhotos, setTaskPhotos] = useState<Array<string | null>>([
+    null,
+    null,
+    null,
+  ]);
+  const [equipmentPhotos, setEquipmentPhotos] = useState<Array<string | null>>([null]);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [activePhotoSlot, setActivePhotoSlot] = useState<number | null>(null);
+  const [cameraTarget, setCameraTarget] = useState<'task' | 'equipment'>('task');
+  const [taskMarkedCompleted, setTaskMarkedCompleted] = useState(false);
+  const [completingTask, setCompletingTask] = useState(false);
+  const [uploadingTaskImages, setUploadingTaskImages] = useState(false);
+  const [taskProgressImageUrls, setTaskProgressImageUrls] = useState<string[]>([]);
+  const [transportVehicles, setTransportVehicles] = useState<TransportVehicle[]>([]);
   const prerequisiteSubTasks =
     task?.subTasks?.filter(subTask => !isMainTaskSubTask(task, subTask)) ?? [];
   const isWorkPending = task?.status === 'Work Pending';
   const isCompleted = task?.status === 'Completed';
-  const isOwnerLocked = ownerLocked || isWorkPending || isCompleted;
   const hasBlockedSubTasks = Boolean(
     prerequisiteSubTasks.some(
       subTask =>
         subTask.status !== 'Completed' && !completedSubTasks[subTask.id],
     ),
   );
-  const canStartTask = !isWorkPending && !hasBlockedSubTasks;
   const completedPrerequisites = prerequisiteSubTasks.filter(
     subTask => subTask.status === 'Completed' || completedSubTasks[subTask.id],
   ).length;
   const { dueDate, dueClock } = getDueParts(task?.dueTime);
+  const hasTransportCoordination = Boolean(task?.vehicles?.length);
+  const hasEquipmentCoordination = true;
+  const equipmentItems = task?.equipment ?? [];
 
   const markPickupProof = (subTask: SubTask) => {
     setPickupProofs(current => ({ ...current, [subTask.id]: true }));
@@ -433,6 +512,351 @@ function TaskDetailModal({
       return;
     }
     setCompletedSubTasks(current => ({ ...current, [subTask.id]: true }));
+  };
+
+  let cameraRef: CameraApi | null = null;
+
+  const openCameraForSlot = (index: number, target: 'task' | 'equipment') => {
+    setCameraTarget(target);
+    setActivePhotoSlot(index);
+    setCameraOpen(true);
+  };
+
+  const captureTaskPhoto = async () => {
+    if (!cameraRef || activePhotoSlot === null) {
+      return;
+    }
+
+    try {
+      const captured = await cameraRef.capture();
+      if (cameraTarget === 'task') {
+        setTaskPhotos(current => {
+          const next = [...current];
+          next[activePhotoSlot] = captured.uri;
+          return next;
+        });
+        setTaskProgressImageUrls([]);
+        setTaskMarkedCompleted(false);
+      } else {
+        setEquipmentPhotos(current => {
+          const next = [...current];
+          next[activePhotoSlot] = captured.uri;
+          return next;
+        });
+        setEquipmentReceiptAttached(false);
+        setEquipmentImageUrl('');
+      }
+      setCameraOpen(false);
+      setActivePhotoSlot(null);
+    } catch {
+      Alert.alert('Camera', 'Unable to capture photo right now.');
+    }
+  };
+
+  const removeTaskPhoto = (index: number) => {
+    setTaskPhotos(current => {
+      const next = [...current];
+      next[index] = null;
+      return next;
+    });
+    setTaskProgressImageUrls([]);
+    setTaskMarkedCompleted(false);
+  };
+
+  const removeEquipmentPhoto = (index: number) => {
+    setEquipmentPhotos(current => {
+      const next = [...current];
+      next[index] = null;
+      return next;
+    });
+    setEquipmentReceiptAttached(false);
+    setEquipmentImageUrl('');
+  };
+
+  const uploadTaskProgressImage = async (uri: string) => {
+    if (!task?.taskId) {
+      return null;
+    }
+    const formData = new FormData();
+    formData.append('task_id', task.taskId);
+    formData.append('image', {
+      uri,
+      type: 'image/jpeg',
+      name: `task-progress-${Date.now()}.jpg`,
+    } as any);
+
+    const response = await fetch(
+      `${API_BASE_URL}/admin_all_task/upload_task_progress_images?task_id=${encodeURIComponent(task.taskId)}`,
+      {
+        method: 'POST',
+        body: formData,
+      },
+    );
+    const data = await response.json();
+    const success = Boolean(data?.success ?? data?.suceess);
+    const imageUrl = (data?.image_url ?? data?.['image_url ']) as string | undefined;
+    if (!response.ok || !success || !imageUrl) {
+      return null;
+    }
+    return imageUrl;
+  };
+
+  const uploadTaskImages = async () => {
+    const selected = taskPhotos.filter(Boolean) as string[];
+    if (selected.length < 3) {
+      Alert.alert('Task', 'Please capture all 3 photos first.');
+      return;
+    }
+    if (!task?.taskId) {
+      Alert.alert('Task', 'Task ID missing.');
+      return;
+    }
+
+    try {
+      setUploadingTaskImages(true);
+      const uploaded: string[] = [];
+      for (const uri of selected) {
+        const imageUrl = await uploadTaskProgressImage(uri);
+        if (!imageUrl) {
+          Alert.alert('Task', 'One or more images failed to upload.');
+          return;
+        }
+        uploaded.push(imageUrl);
+      }
+      setTaskProgressImageUrls(uploaded);
+      Alert.alert('Task', 'Task progress images uploaded successfully.');
+    } finally {
+      setUploadingTaskImages(false);
+    }
+  };
+
+  const completeTask = async () => {
+    if (!task?.taskId) {
+      Alert.alert('Task', 'Task ID missing.');
+      return;
+    }
+    const completedAcresValue = Number(completedAcres);
+    if (!Number.isFinite(completedAcresValue)) {
+      Alert.alert('Task', 'Please enter a valid completed acres value.');
+      return;
+    }
+
+    try {
+      setCompletingTask(true);
+      const response = await fetch(`${API_BASE_URL}/admin_all_task/update_task_status`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          task_id: task.taskId,
+          feild_id: task.farmId,
+          completed_acres: completedAcresValue,
+          status: 'completed',
+          calander_id: task.calanderId ?? '',
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.success) {
+        Alert.alert('Task', 'Unable to mark task as completed.');
+        return;
+      }
+      setTaskMarkedCompleted(true);
+      Alert.alert('Task', 'Task marked completed successfully.');
+    } catch {
+      Alert.alert('Task', 'Unable to update task status right now.');
+    } finally {
+      setCompletingTask(false);
+    }
+  };
+
+  const openTaskLocationInMaps = async () => {
+    if (!task?.farmId) {
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/farmer_managment/get_land_coordinates_from_farm_id/${encodeURIComponent(task.farmId)}`,
+      );
+      const data = await response.json();
+      const coords = data?.land_coordinates;
+
+      if (!response.ok || !Array.isArray(coords) || coords.length < 2) {
+        Alert.alert('Location', 'Unable to fetch land coordinates.');
+        return;
+      }
+
+      const lat = Number(coords[0]);
+      const lng = Number(coords[1]);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        Alert.alert('Location', 'Invalid land coordinates.');
+        return;
+      }
+
+      await Linking.openURL(`https://www.google.com/maps?q=${lat},${lng}`);
+    } catch {
+      Alert.alert('Location', 'Unable to open map right now.');
+    }
+  };
+
+  useEffect(() => {
+    const fetchTransportCoordination = async () => {
+      if (!task?.vehicles?.length) {
+        setTransportVehicles([]);
+        return;
+      }
+
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/feild_manager/get_transport_coordination_data`,
+          {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({vehicle_list: task.vehicles}),
+          },
+        );
+        const data = await response.json();
+        if (!response.ok || !Array.isArray(data?.vehicles)) {
+          setTransportVehicles([]);
+          return;
+        }
+        setTransportVehicles(data.vehicles as TransportVehicle[]);
+      } catch {
+        setTransportVehicles([]);
+      }
+    };
+
+    fetchTransportCoordination();
+  }, [task]);
+
+  useEffect(() => {
+    setCompletedAcres('');
+    setTaskPhotos([null, null, null]);
+    setEquipmentPhotos([null]);
+    setTaskProgressImageUrls([]);
+    setTaskMarkedCompleted(false);
+    setCompletingTask(false);
+    setEquipmentReceiptAttached(false);
+    setEquipmentImageUrl('');
+  }, [task?.taskId]);
+
+  useEffect(() => {
+    setTransportDone((task?.transportCoordinationStatus || '').toLowerCase() === 'completed');
+    setEquipmentDone((task?.equipmentCoordinationStatus || '').toLowerCase() === 'completed');
+  }, [task]);
+
+  const hasThreePhotos = taskPhotos.filter(Boolean).length === 3;
+  const hasEquipmentPhoto = equipmentPhotos.filter(Boolean).length === 1;
+  const hasCompletedAcres = completedAcres.trim().length > 0;
+  const canUploadTaskImages = hasThreePhotos && !uploadingTaskImages;
+  const canUploadEquipmentImages = hasEquipmentPhoto && !uploadingEquipmentImage;
+  const canCompleteTask =
+    hasCompletedAcres &&
+    hasThreePhotos &&
+    taskProgressImageUrls.length === 3 &&
+    !completingTask;
+
+  const completeTransportCoordination = async () => {
+    if (!task?.taskId) {
+      Alert.alert('Transport', 'Task ID missing.');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE_URL}/feild_manager/update_vehicle_coordination_status`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          task_id: task.taskId,
+          new_status: 'completed',
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.success) {
+        Alert.alert('Transport', 'Unable to update vehicle coordination status.');
+        return;
+      }
+      setTransportDone(true);
+      Alert.alert('Transport', 'Vehicle coordination marked completed.');
+    } catch {
+      Alert.alert('Transport', 'Unable to update status right now.');
+    }
+  };
+
+  const uploadEquipmentImage = async (uri: string) => {
+    if (!task?.taskId) {
+      Alert.alert('Equipment', 'Task ID missing.');
+      return null;
+    }
+    const formData = new FormData();
+    formData.append('image', {
+      uri,
+      type: 'image/jpeg',
+      name: `equipment-${Date.now()}.jpg`,
+    } as any);
+
+    const response = await fetch(
+      `${API_BASE_URL}/feild_manager/upload_equipment_coordination_image?task_id=${encodeURIComponent(task.taskId)}`,
+      {
+        method: 'POST',
+        body: formData,
+      },
+    );
+    const data = await response.json();
+    if (!response.ok || !data?.success || !data?.image_url) {
+      return null;
+    }
+    return data.image_url as string;
+  };
+
+  const completeEquipmentCoordination = async () => {
+    if (!task?.taskId) {
+      Alert.alert('Equipment', 'Task ID missing.');
+      return;
+    }
+    if (!equipmentImageUrl) {
+      Alert.alert('Equipment', 'Attach receiving image first.');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE_URL}/feild_manager/update_equipment_coordination_status`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          task_id: task.taskId,
+          new_status: 'completed',
+          image_url: equipmentImageUrl,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.success) {
+        Alert.alert('Equipment', 'Unable to update equipment coordination status.');
+        return;
+      }
+      setEquipmentDone(true);
+      Alert.alert('Equipment', 'Equipment coordination marked completed.');
+    } catch {
+      Alert.alert('Equipment', 'Unable to update status right now.');
+    }
+  };
+
+  const uploadEquipmentImages = async () => {
+    const selected = equipmentPhotos.filter(Boolean) as string[];
+    if (!selected.length) {
+      Alert.alert('Equipment', 'Please capture receiving photo first.');
+      return;
+    }
+    try {
+      setUploadingEquipmentImage(true);
+      const imageUrl = await uploadEquipmentImage(selected[0]);
+      if (!imageUrl) {
+        Alert.alert('Equipment', 'Receiving image upload failed.');
+        return;
+      }
+      setEquipmentImageUrl(imageUrl);
+      setEquipmentReceiptAttached(true);
+      Alert.alert('Equipment', 'Receiving image uploaded.');
+    } finally {
+      setUploadingEquipmentImage(false);
+    }
   };
 
   return (
@@ -531,14 +955,169 @@ function TaskDetailModal({
                   />
                 </View>
 
-                <View style={styles.cleanSection}>
-                  <Text style={styles.cleanSectionTitle}>Description</Text>
-                  <Text style={styles.descriptionText}>
-                    {translateTaskText(task.description, language)}
-                  </Text>
+                <View style={[styles.cleanSection, styles.hiddenSection]}>
+                  <Text style={styles.cleanSectionTitle}>Land Details</Text>
+                  <View style={styles.detailGrid}>
+                    <View style={styles.detailGridItem}>
+                      <Text style={styles.detailGridLabel}>Farm ID</Text>
+                      <Text style={styles.detailGridValue}>{task.farmId}</Text>
+                    </View>
+                    <View style={styles.detailGridItem}>
+                      <Text style={styles.detailGridLabel}>Farmer Name</Text>
+                      <Text style={styles.detailGridValue}>{task.farmerName}</Text>
+                    </View>
+                    <View style={styles.detailGridItem}>
+                      <Text style={styles.detailGridLabel}>Location</Text>
+                      <Text style={styles.detailGridValue}>{task.location}</Text>
+                    </View>
+                    <View style={styles.detailGridItem}>
+                      <Text style={styles.detailGridLabel}>Task</Text>
+                      <Text style={styles.detailGridValue}>
+                        {translateTaskText(task.title, language)}
+                      </Text>
+                    </View>
+                  </View>
                 </View>
 
-                <View style={styles.cleanSection}>
+                {hasTransportCoordination ? (
+                  <View style={styles.cleanSection}>
+                    <Text style={styles.cleanSectionTitle}>Transport Coordination</Text>
+                    <Text style={styles.descriptionText}>
+                      TASK: coordinate with the driver to do this task
+                    </Text>
+                    {transportVehicles.length ? (
+                      <View style={styles.transportTable}>
+                        <View style={styles.transportHeadRow}>
+                          <Text style={[styles.transportHeadCell, styles.transportCellName]}>Name</Text>
+                          <Text style={[styles.transportHeadCell, styles.transportCellPhone]}>Ph. No.</Text>
+                          <Text style={[styles.transportHeadCell, styles.transportCellVehicle]}>Vehicle</Text>
+                          <Text style={[styles.transportHeadCell, styles.transportCellNumber]}>V.No.</Text>
+                        </View>
+                        {transportVehicles.map(vehicle => (
+                          <View key={`${vehicle.vehicle_number}-${vehicle.driver_name}`} style={styles.transportBodyRow}>
+                            <Text style={[styles.transportBodyCell, styles.transportCellName]}>
+                              {vehicle.driver_name || '-'}
+                            </Text>
+                            <Text style={[styles.transportBodyCell, styles.transportCellPhone]}>
+                              {vehicle.driver_contact || '-'}
+                            </Text>
+                            <Text style={[styles.transportBodyCell, styles.transportCellVehicle]}>
+                              {vehicle.vehicle_model || '-'}
+                            </Text>
+                            <Text style={[styles.transportBodyCell, styles.transportCellNumber]}>
+                              {vehicle.vehicle_number || '-'}
+                            </Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : (
+                      <Text style={styles.descriptionText}>No transport data found.</Text>
+                    )}
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      disabled={transportDone}
+                      onPress={completeTransportCoordination}
+                      style={[styles.coordButton, transportDone && styles.coordButtonDone]}
+                    >
+                      <Text style={styles.coordButtonText}>
+                        {transportDone ? 'Coordination Completed' : 'Coordination Complete'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+
+                {hasEquipmentCoordination ? (
+                  <View style={styles.cleanSection}>
+                    <Text style={styles.cleanSectionTitle}>Equipment Coordination</Text>
+                    <Text style={styles.descriptionText}>
+                      TASK: get these items from the inventory
+                    </Text>
+                    <View style={styles.otpBox}>
+                      <Text style={styles.otpLabel}>OTP</Text>
+                      <Text style={styles.otpValue}>{task?.equipmentOtp || '-'}</Text>
+                    </View>
+                    <View style={styles.equipmentTable}>
+                      <View style={styles.equipmentHeadRow}>
+                        <Text style={[styles.equipmentHeadCell, styles.equipmentHeadLeft]}>
+                          Item Name
+                        </Text>
+                        <Text style={styles.equipmentHeadCell}>Quantity</Text>
+                      </View>
+                      {equipmentItems.map(item => (
+                        <View key={`${item.equipment_name}-${item.quantity}`} style={styles.equipmentBodyRow}>
+                          <Text style={[styles.equipmentBodyCell, styles.equipmentHeadLeft]}>
+                            {item.equipment_name}
+                          </Text>
+                          <Text style={styles.equipmentBodyCell}>{item.quantity}</Text>
+                        </View>
+                      ))}
+                    </View>
+                    <View style={styles.taskPhotoRow}>
+                      {equipmentPhotos.map((uri, index) => (
+                        <View key={`equipment-photo-${index}`} style={styles.taskPhotoBox}>
+                          {uri ? (
+                            <>
+                              <Image source={{uri}} style={styles.taskPhotoPreview} resizeMode="cover" />
+                              <TouchableOpacity
+                                activeOpacity={0.8}
+                                onPress={() => removeEquipmentPhoto(index)}
+                                style={styles.taskPhotoRemove}>
+                                <Icon name="X" size={14} color="#FFFFFF" />
+                              </TouchableOpacity>
+                            </>
+                          ) : (
+                            <TouchableOpacity
+                              activeOpacity={0.8}
+                              onPress={() => openCameraForSlot(index, 'equipment')}
+                              style={styles.taskPhotoAdd}>
+                              <Icon name="Plus" size={18} color={BLUE} />
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                    <TouchableOpacity
+                      activeOpacity={0.82}
+                      onPress={uploadEquipmentImages}
+                      disabled={!canUploadEquipmentImages}
+                      style={[
+                        styles.uploadEquipButton,
+                        !canUploadEquipmentImages && styles.uploadEquipButtonDisabled,
+                        equipmentReceiptAttached && styles.uploadEquipButtonDone,
+                      ]}
+                    >
+                      <Icon
+                        name={equipmentReceiptAttached ? 'CheckCircle2' : 'ImageUp'}
+                        size={18}
+                        color={equipmentReceiptAttached ? GREEN : BLUE}
+                      />
+                      <Text
+                        style={[
+                          styles.uploadEquipText,
+                          equipmentReceiptAttached && styles.uploadEquipTextDone,
+                        ]}
+                      >
+                        {equipmentReceiptAttached
+                          ? 'Item Image Uploaded'
+                          : uploadingEquipmentImage
+                          ? 'Uploading...'
+                          : 'Upload Item Image'}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      disabled={equipmentDone}
+                      onPress={completeEquipmentCoordination}
+                      style={[styles.coordButton, equipmentDone && styles.coordButtonDone]}
+                    >
+                      <Text style={styles.coordButtonText}>
+                        {equipmentDone ? 'Coordination Completed' : 'Coordination Complete'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+
+                <View style={[styles.cleanSection, styles.hiddenSection]}>
                   <View style={styles.sectionTitleRow}>
                     <Text style={styles.cleanSectionTitle}>
                       Sub Tasks ({completedPrerequisites}/
@@ -670,236 +1249,142 @@ function TaskDetailModal({
                 </View>
 
                 <View style={styles.cleanSection}>
-                  <Text style={styles.cleanSectionTitle}>Details</Text>
-                  <View style={styles.detailGrid}>
-                    <View style={styles.detailGridItem}>
-                      <Text style={styles.detailGridLabel}>Assigned By</Text>
-                      <Text style={styles.detailGridValue}>Amit Kumar</Text>
-                    </View>
-                    <View style={styles.detailGridItem}>
-                      <Text style={styles.detailGridLabel}>Assigned On</Text>
-                      <Text style={styles.detailGridValue}>18 May 2025</Text>
-                    </View>
-                    <View style={styles.detailGridItem}>
-                      <Text style={styles.detailGridLabel}>
-                        Related Land / Plot
-                      </Text>
-                      <Text style={styles.detailGridValue}>{task.farmId}</Text>
-                    </View>
-                    <View style={styles.detailGridItem}>
-                      <Text style={styles.detailGridLabel}>Location</Text>
-                      <View style={styles.locationValueRow}>
-                        <Text style={styles.detailGridValue}>
-                          {task.location}
-                        </Text>
-                        <Icon name="Navigation" size={15} color={GREEN} />
-                      </View>
-                    </View>
-                  </View>
-                </View>
-
-                <View style={styles.cleanSection}>
-                  <Text style={styles.cleanSectionTitle}>Attachments (2)</Text>
-                  <View style={styles.attachmentRow}>
-                    <View style={styles.attachmentCard}>
-                      <View style={[styles.fileBadge, styles.pdfBadge]}>
-                        <Text style={styles.fileBadgeText}>PDF</Text>
-                      </View>
-                      <View style={styles.attachmentCopy}>
-                        <Text style={styles.attachmentTitle}>
-                          Plot_Details.pdf
-                        </Text>
-                        <Text style={styles.attachmentMeta}>245 KB</Text>
-                      </View>
-                      <Icon name="Download" size={18} color={MUTED} />
-                    </View>
-                    <View style={styles.attachmentCard}>
-                      <View style={[styles.fileBadge, styles.jpgBadge]}>
-                        <Text style={styles.fileBadgeText}>JPG</Text>
-                      </View>
-                      <View style={styles.attachmentCopy}>
-                        <Text style={styles.attachmentTitle}>
-                          Reference_Image.jpg
-                        </Text>
-                        <Text style={styles.attachmentMeta}>1.2 MB</Text>
-                      </View>
-                      <Icon name="Download" size={18} color={MUTED} />
-                    </View>
-                  </View>
-                </View>
-
-                <View style={styles.ownerPanel}>
-                  <View style={styles.ownerTitleRow}>
-                    <Text style={styles.cleanSectionTitle}>Owner</Text>
-                    {isOwnerLocked ? (
-                      <View style={styles.lockedOwnerPill}>
-                        <Icon name="Lock" size={12} color={MUTED} />
-                        <Text style={styles.lockedOwnerText}>Locked</Text>
-                      </View>
-                    ) : null}
-                  </View>
-                  <View style={styles.ownerActionRow}>
+                  <View style={styles.taskHeaderRow}>
+                    <Text style={styles.cleanSectionTitle}>Task</Text>
                     <TouchableOpacity
                       activeOpacity={0.78}
-                      disabled={isOwnerLocked}
-                      onPress={() => {
-                        setMainOwner('Rahul Sharma');
-                        setOwnerLocked(true);
-                      }}
-                      style={[
-                        styles.selfActionButton,
-                        isOwnerLocked && styles.lockedActionButton,
-                      ]}
-                    >
-                      <Text style={styles.selfActionText}>Do myself</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      activeOpacity={0.78}
-                      disabled={isOwnerLocked}
-                      onPress={() => {
-                        setMainOwner(selectedStaff);
-                        setOwnerLocked(true);
-                        setStaffDropdownOpen(false);
-                        onAssign(selectedStaff);
-                      }}
-                      style={[
-                        styles.assignActionButton,
-                        isOwnerLocked && styles.lockedActionButton,
-                      ]}
-                    >
-                      <Text style={styles.assignActionText}>
-                        Assign selected
-                      </Text>
+                      onPress={openTaskLocationInMaps}
+                      style={styles.mapIconButton}>
+                      <Icon name="MapPinned" size={17} color={BLUE} />
                     </TouchableOpacity>
                   </View>
-
-                  <Text style={styles.dropdownLabel}>{t('assignStaff')}</Text>
-                  <TouchableOpacity
-                    activeOpacity={0.78}
-                    disabled={isOwnerLocked}
-                    onPress={() => setStaffDropdownOpen(open => !open)}
-                    style={[
-                      styles.dropdownButton,
-                      isOwnerLocked && styles.dropdownButtonDisabled,
-                    ]}
-                  >
-                    <View style={styles.dropdownValue}>
-                      <Icon name="UserRound" size={17} color={GREEN} />
-                      <Text style={styles.dropdownValueText}>
-                        {selectedStaff}
-                      </Text>
+                  <View style={styles.taskInfoBox}>
+                    <View style={styles.taskInfoRow}>
+                      <Text style={styles.taskInfoKey}>Farm ID</Text>
+                      <Text style={styles.taskInfoValue}>{`${task.farmId.slice(0, 4)}******`}</Text>
                     </View>
-                    <Icon
-                      name={
-                        isOwnerLocked
-                          ? 'Lock'
-                          : staffDropdownOpen
-                          ? 'ChevronUp'
-                          : 'ChevronDown'
-                      }
-                      size={19}
-                      color={MUTED}
-                    />
+                    <View style={styles.taskInfoRow}>
+                      <Text style={styles.taskInfoKey}>Farmer Name</Text>
+                      <Text style={styles.taskInfoValue}>{task.farmerName}</Text>
+                    </View>
+                    <View style={styles.taskInfoRow}>
+                      <Text style={styles.taskInfoKey}>Location</Text>
+                      <Text style={styles.taskInfoValue}>{task.location}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.acresRow}>
+                    <Text style={styles.detailGridLabel}>Activity</Text>
+                    <Text style={styles.detailGridValue}>{translateTaskText(task.title, language)}</Text>
+                  </View>
+                  <View style={styles.acresRow}>
+                    <Text style={[styles.detailGridLabel, styles.acresLabelBold]}>Allocated Acres</Text>
+                    <Text style={styles.detailGridValue}>{task.assignedAcres ?? '-'}</Text>
+                  </View>
+                  <View style={styles.acresRow}>
+                    <Text style={styles.detailGridLabel}>Completed Acres</Text>
+                    <View style={styles.completedAcresWrap}>
+                      <TextInput
+                        value={completedAcres}
+                        onChangeText={setCompletedAcres}
+                        placeholder="Enter"
+                        keyboardType="decimal-pad"
+                        placeholderTextColor="#94A3B8"
+                        style={styles.completedAcresInput}
+                      />
+                    </View>
+                  </View>
+
+                  <Text style={styles.cleanSectionTitle}>Attach photos</Text>
+                  <View style={styles.taskPhotoRow}>
+                    {taskPhotos.map((uri, index) => (
+                      <View key={`task-photo-${index}`} style={styles.taskPhotoBox}>
+                        {uri ? (
+                          <>
+                            <Image source={{uri}} style={styles.taskPhotoPreview} resizeMode="cover" />
+                            <TouchableOpacity
+                              activeOpacity={0.8}
+                              onPress={() => removeTaskPhoto(index)}
+                              style={styles.taskPhotoRemove}>
+                              <Icon name="X" size={14} color="#FFFFFF" />
+                            </TouchableOpacity>
+                          </>
+                        ) : (
+                          <TouchableOpacity
+                            activeOpacity={0.8}
+                            onPress={() => openCameraForSlot(index, 'task')}
+                            style={styles.taskPhotoAdd}>
+                            <Icon name="Plus" size={18} color={BLUE} />
+                          </TouchableOpacity>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                    <TouchableOpacity
+                      activeOpacity={0.82}
+                      onPress={uploadTaskImages}
+                      disabled={!canUploadTaskImages}
+                      style={[
+                        styles.uploadTaskImagesButton,
+                        !canUploadTaskImages && styles.uploadTaskImagesButtonDisabled,
+                      ]}>
+                    <Icon name="Upload" size={17} color="#FFFFFF" />
+                    <Text style={styles.uploadTaskImagesText}>
+                      {uploadingTaskImages ? 'Uploading...' : 'Upload'}
+                    </Text>
                   </TouchableOpacity>
-                  {staffDropdownOpen && !isOwnerLocked ? (
-                    <View style={styles.dropdownList}>
-                      {TEAM_MEMBERS.map(member => (
-                        <TouchableOpacity
-                          key={member}
-                          activeOpacity={0.78}
-                          onPress={() => {
-                            setSelectedStaff(member);
-                            setStaffDropdownOpen(false);
-                          }}
-                          style={styles.dropdownItem}
-                        >
-                          <Text style={styles.dropdownItemText}>{member}</Text>
-                          {selectedStaff === member ? (
-                            <Icon name="Check" size={17} color={GREEN} />
-                          ) : null}
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  ) : null}
+
+                  <TouchableOpacity
+                    activeOpacity={0.82}
+                    onPress={completeTask}
+                    disabled={!canCompleteTask}
+                    style={[
+                      styles.taskCompleteButton,
+                      !canCompleteTask && styles.taskCompleteButtonDisabled,
+                      taskMarkedCompleted && styles.taskCompleteButtonDone,
+                    ]}>
+                    <Text style={styles.taskCompleteButtonText}>
+                      {completingTask ? 'Completing...' : 'Task Completed'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
               </ScrollView>
 
-              {!isCompleted ? (
-                <View style={styles.modalActions}>
-                  <TouchableOpacity
-                    disabled={!canStartTask}
-                    activeOpacity={canStartTask ? 0.78 : 1}
-                    onPress={() => {
-                      if (hasBlockedSubTasks) {
-                        Alert.alert(
-                          'Sub tasks pending',
-                          'Complete all sub tasks before starting the main task.',
-                        );
-                        return;
-                      }
-                      onStart(task);
-                      Alert.alert(
-                        t('taskStarted'),
-                        `${translateTaskText(task.title, language)} - ${t(
-                          'workPending',
-                        )}.`,
-                      );
+              <Modal
+                visible={cameraOpen}
+                animationType="slide"
+                onRequestClose={() => {
+                  setCameraOpen(false);
+                  setActivePhotoSlot(null);
+                }}>
+                <View style={styles.cameraScreen}>
+                  <Camera
+                    ref={ref => {
+                      cameraRef = ref;
                     }}
-                    style={[
-                      styles.progressAction,
-                      !canStartTask && styles.blockedOutlineAction,
-                    ]}
-                  >
-                    <Icon
-                      name="PlayCircle"
-                      size={18}
-                      color={canStartTask ? '#FFFFFF' : MUTED}
-                    />
-                    <Text
-                      style={[
-                        styles.progressActionText,
-                        !canStartTask && styles.blockedOutlineText,
-                      ]}
-                    >
-                      Mark In Progress
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    disabled={!canStartTask}
-                    activeOpacity={canStartTask ? 0.78 : 1}
-                    onPress={() => {
-                      Alert.alert(
-                        'Completed',
-                        `${translateTaskText(
-                          task.title,
-                          language,
-                        )} marked complete.`,
-                      );
-                    }}
-                    style={[
-                      styles.completeAction,
-                      hasBlockedSubTasks && styles.blockedAction,
-                    ]}
-                  >
-                    <Icon
-                      name="CircleCheck"
-                      size={18}
-                      color={hasBlockedSubTasks ? '#FFFFFF' : GREEN}
-                    />
-                    <Text
-                      style={[
-                        styles.completeActionText,
-                        hasBlockedSubTasks && styles.blockedCompleteText,
-                      ]}
-                    >
-                      {hasBlockedSubTasks
-                        ? 'Complete Sub Tasks'
-                        : 'Mark as Completed'}
-                    </Text>
-                  </TouchableOpacity>
+                    style={styles.cameraPreview}
+                    cameraType={CameraType.Back}
+                  />
+                  <View style={styles.cameraActions}>
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setCameraOpen(false);
+                        setActivePhotoSlot(null);
+                      }}
+                      style={styles.cameraCancel}>
+                      <Text style={styles.cameraCancelText}>Cancel</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      onPress={captureTaskPhoto}
+                      style={styles.cameraCapture}>
+                      <Icon name="Camera" size={20} color="#FFFFFF" />
+                      <Text style={styles.cameraCaptureText}>Capture</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              ) : null}
+              </Modal>
             </>
           ) : null}
         </View>
@@ -1310,6 +1795,65 @@ function VDRow({ icon, label, value, isLast }: { icon: string; label: string; va
 
 function getTaskCount(groups: TaskGroup[]) {
   return groups.reduce((total, group) => total + group.tasks.length, 0);
+}
+
+function flattenGroups(groups: TaskGroup[]) {
+  return groups.flatMap(group => group.tasks);
+}
+
+function mapApiTasksToUi(tasks: ApiTask[], farmDetails: FarmDetail[]): Task[] {
+  const locationByFarmId = new Map(
+    farmDetails.map(item => [
+      item.farm.farm_id,
+      `${item.farm.land_data.village}, ${item.farm.land_data.district}`,
+    ]),
+  );
+
+  return tasks.map(task => {
+    const firstAssigned = task.assigned_acres?.[0];
+    const farmId = firstAssigned?.farm_id || task.feild_id?.[0] || '-';
+    const status = normalizeTaskStatus(task.status?.feild_manager_status);
+
+    return {
+      taskId: task.task_id,
+      calanderId: task.calander_id ?? '',
+      title: firstAssigned?.activity || 'Task',
+      farmId,
+      location: locationByFarmId.get(farmId) || '-',
+      farmerName: task.farmer_name || '-',
+      dueTime: firstAssigned?.date || '-',
+      assignedAcres: `${firstAssigned?.assigned_acres ?? 0}`,
+      vehicles: task.vehicles ?? [],
+      equipmentOtp: task.equipment_otp ?? '',
+      transportCoordinationStatus:
+        task.trasport_coordination_status ?? task.transport_coordination_status ?? 'pending',
+      equipmentCoordinationStatus: task.equipment_coordination_status ?? 'pending',
+      equipment: (task.equipment ?? []).map(item => ({
+        equipment_name: item.equipment_name,
+        quantity: item.quantity,
+      })),
+      description: '',
+      assignedTo: 'Field Manager',
+      priority: 'Normal',
+      status,
+      allocation: 'Field Team',
+      subTasks: [],
+    };
+  });
+}
+
+function normalizeTaskStatus(status?: string) {
+  const value = (status || '').toLowerCase();
+  if (value === 'completed') {
+    return 'Completed';
+  }
+  if (value === 'pending') {
+    return 'Pending';
+  }
+  if (value === 'assigned') {
+    return 'Assigned';
+  }
+  return 'Assigned';
 }
 
 function getGroupTitle(title: string, t: ReturnType<typeof useLanguage>['t']) {
@@ -2387,10 +2931,347 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 20,
   },
+  hiddenSection: {
+    display: 'none',
+  },
+  completedAcresInput: {
+    backgroundColor: '#FFFFFF',
+    borderColor: CARD_BORDER,
+    borderRadius: 8,
+    borderWidth: 1,
+    color: INK,
+    fontSize: 12,
+    fontWeight: '800',
+    height: 34,
+    paddingHorizontal: 10,
+  },
+  completedAcresWrap: {
+    width: 110,
+  },
+  taskInfoBox: {
+    backgroundColor: '#F8FAFC',
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  taskInfoRow: {
+    alignItems: 'center',
+    borderBottomColor: CARD_BORDER,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  taskInfoKey: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  taskInfoValue: {
+    color: INK,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '900',
+    marginLeft: 12,
+    textAlign: 'right',
+  },
+  acresRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  acresLabelBold: {
+    fontWeight: '900',
+  },
+  taskPhotoRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  uploadTaskImagesButton: {
+    alignItems: 'center',
+    backgroundColor: BLUE,
+    borderRadius: 9,
+    flexDirection: 'row',
+    gap: 6,
+    height: 38,
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  uploadTaskImagesButtonDisabled: {
+    backgroundColor: '#94A3B8',
+  },
+  uploadTaskImagesText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  taskPhotoBox: {
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    flex: 1,
+    height: 86,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  taskPhotoAdd: {
+    alignItems: 'center',
+    backgroundColor: BLUE_SOFT,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  taskPhotoPreview: {
+    height: '100%',
+    width: '100%',
+  },
+  taskPhotoRemove: {
+    alignItems: 'center',
+    backgroundColor: RED,
+    borderRadius: 14,
+    height: 24,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 6,
+    top: 6,
+    width: 24,
+  },
+  taskCompleteButton: {
+    alignItems: 'center',
+    backgroundColor: BLUE,
+    borderRadius: 9,
+    height: 42,
+    justifyContent: 'center',
+    marginTop: 12,
+  },
+  taskCompleteButtonDisabled: {
+    backgroundColor: '#94A3B8',
+  },
+  taskCompleteButtonDone: {
+    backgroundColor: GREEN,
+  },
+  taskCompleteButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  cameraScreen: {
+    backgroundColor: '#000000',
+    flex: 1,
+  },
+  cameraPreview: {
+    flex: 1,
+  },
+  cameraActions: {
+    alignItems: 'center',
+    backgroundColor: '#111827',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  cameraCancel: {
+    alignItems: 'center',
+    backgroundColor: '#1F2937',
+    borderRadius: 9,
+    height: 42,
+    justifyContent: 'center',
+    width: 110,
+  },
+  cameraCancelText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  cameraCapture: {
+    alignItems: 'center',
+    backgroundColor: GREEN,
+    borderRadius: 9,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 8,
+    height: 42,
+    justifyContent: 'center',
+  },
+  cameraCaptureText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  coordButton: {
+    alignItems: 'center',
+    backgroundColor: BLUE,
+    borderRadius: 9,
+    height: 40,
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  coordButtonDone: {
+    backgroundColor: GREEN,
+  },
+  coordButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  otpBox: {
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  otpLabel: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  otpValue: {
+    color: INK,
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  equipmentTable: {
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 10,
+    overflow: 'hidden',
+  },
+  equipmentHeadRow: {
+    backgroundColor: '#F1F5F9',
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  equipmentHeadCell: {
+    color: INK,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'right',
+  },
+  equipmentHeadLeft: {
+    textAlign: 'left',
+  },
+  equipmentBodyRow: {
+    borderTopColor: CARD_BORDER,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  equipmentBodyCell: {
+    color: '#526079',
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '800',
+    textAlign: 'right',
+  },
+  transportTable: {
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 10,
+    overflow: 'hidden',
+  },
+  transportHeadRow: {
+    backgroundColor: '#F1F5F9',
+    flexDirection: 'row',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+  },
+  transportBodyRow: {
+    borderTopColor: CARD_BORDER,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    paddingHorizontal: 8,
+    paddingVertical: 9,
+  },
+  transportHeadCell: {
+    color: INK,
+    fontSize: 11,
+    fontWeight: '900',
+    textAlign: 'left',
+  },
+  transportBodyCell: {
+    color: '#526079',
+    fontSize: 11,
+    fontWeight: '800',
+    textAlign: 'left',
+  },
+  transportCellName: {
+    flex: 1.1,
+  },
+  transportCellPhone: {
+    flex: 1.1,
+  },
+  transportCellVehicle: {
+    flex: 1,
+  },
+  transportCellNumber: {
+    flex: 1,
+  },
+  uploadEquipButton: {
+    alignItems: 'center',
+    backgroundColor: BLUE_SOFT,
+    borderColor: BLUE_BORDER,
+    borderRadius: 9,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    justifyContent: 'center',
+    marginTop: 10,
+    minHeight: 40,
+    paddingHorizontal: 10,
+  },
+  uploadEquipButtonDisabled: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
+  },
+  uploadEquipButtonDone: {
+    backgroundColor: GREEN_SOFT,
+    borderColor: GREEN_BORDER,
+  },
+  uploadEquipText: {
+    color: BLUE,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  uploadEquipTextDone: {
+    color: GREEN,
+  },
   sectionTitleRow: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
+  },
+  taskHeaderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 2,
+  },
+  mapIconButton: {
+    alignItems: 'center',
+    backgroundColor: BLUE_SOFT,
+    borderColor: BLUE_BORDER,
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 30,
+    justifyContent: 'center',
+    width: 30,
   },
   viewAllText: {
     color: GREEN,

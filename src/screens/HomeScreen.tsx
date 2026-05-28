@@ -2,6 +2,8 @@ import {
   Alert,
   Image,
   Modal,
+  PermissionsAndroid,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -9,12 +11,15 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import {useState} from 'react';
+import {useEffect, useRef, useState} from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useNavigation} from '@react-navigation/native';
 import LinearGradient from 'react-native-linear-gradient';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Icon from '../components/Icon';
 import {useLanguage} from '../context/LanguageContext';
+import {type StaffProfile} from '../auth/session';
+import {API_BASE_URL} from '../config';
 
 const AVATAR = require('../assets/rahul-sharma-avatar.png');
 const LOGO_3F = require('../assets/logo-3f.png');
@@ -33,17 +38,21 @@ const PURPLE = '#8B35E8';
 const PURPLE_SOFT = '#F3E9FF';
 const PURPLE_BORDER = '#D8B4FE';
 const CARD_BORDER = '#E7EDF0';
+const TRACE_CACHE_KEY = '@staff_location_trace_buffer';
 
-export default function HomeScreen() {
+export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile | null}) {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const {t} = useLanguage();
   const [isCheckedIn, setIsCheckedIn] = useState(true);
+  const [currentLocation, setCurrentLocation] = useState('Bori, Durg, Chhattisgarh');
   const [attendanceCalendarOpen, setAttendanceCalendarOpen] = useState(false);
   const [vehicleLogOpen, setVehicleLogOpen] = useState(false);
   const [reimbursementOpen, setReimbursementOpen] = useState(false);
   const [ticketOpen, setTicketOpen] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const collectTraceTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const uploadTraceTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const calendarCells = [
     ...Array(4).fill(null),
     ...Array.from({length: 31}, (_, index) => index + 1),
@@ -65,6 +74,120 @@ export default function HomeScreen() {
         : t('checkedInSuccess'),
     );
   };
+
+  const getCurrentCoordinates = () =>
+    new Promise<{lat: number; long: number} | null>(resolve => {
+      const geolocation = (globalThis as any)?.navigator?.geolocation;
+      if (!geolocation?.getCurrentPosition) {
+        resolve(null);
+        return;
+      }
+      geolocation.getCurrentPosition(
+        (position: any) => {
+          const lat = Number(position?.coords?.latitude);
+          const long = Number(position?.coords?.longitude);
+          if (Number.isFinite(lat) && Number.isFinite(long)) {
+            resolve({lat, long});
+            return;
+          }
+          resolve(null);
+        },
+        () => resolve(null),
+        {enableHighAccuracy: true, timeout: 15000, maximumAge: 0},
+      );
+    });
+
+  const appendTracePointToCache = async (point: {lat: number; long: number}) => {
+    const raw = await AsyncStorage.getItem(TRACE_CACHE_KEY);
+    const tracerData = raw ? (JSON.parse(raw) as Record<string, {lat: number; long: number}>) : {};
+    tracerData[new Date().toISOString()] = point;
+    await AsyncStorage.setItem(TRACE_CACHE_KEY, JSON.stringify(tracerData));
+  };
+
+  const uploadTraceBatch = async () => {
+    if (!staffProfile?.staff_id) {
+      return;
+    }
+    const raw = await AsyncStorage.getItem(TRACE_CACHE_KEY);
+    const tracerData = raw ? (JSON.parse(raw) as Record<string, {lat: number; long: number}>) : {};
+    if (!Object.keys(tracerData).length) {
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin_staff/append_staff_location_tracing`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          staff_id: staffProfile.staff_id,
+          tracer_data: tracerData,
+        }),
+      });
+      const data = await response.json();
+      if (response.ok && data?.success !== false) {
+        await AsyncStorage.removeItem(TRACE_CACHE_KEY);
+      }
+    } catch {
+      // keep cached data for next retry
+    }
+  };
+
+  const startLocationTracking = async () => {
+    if (Platform.OS === 'android') {
+      const permission = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      );
+      if (permission !== PermissionsAndroid.RESULTS.GRANTED) {
+        return;
+      }
+    }
+
+    const collect = async () => {
+      const point = await getCurrentCoordinates();
+      if (!point) {
+        return;
+      }
+      setCurrentLocation(`${point.lat.toFixed(6)}, ${point.long.toFixed(6)}`);
+      await appendTracePointToCache(point);
+    };
+
+    await collect();
+    collectTraceTimer.current = setInterval(() => {
+      collect();
+    }, 2000);
+    uploadTraceTimer.current = setInterval(() => {
+      uploadTraceBatch();
+    }, 60000);
+  };
+
+  const stopLocationTracking = async () => {
+    if (collectTraceTimer.current) {
+      clearInterval(collectTraceTimer.current);
+      collectTraceTimer.current = null;
+    }
+    if (uploadTraceTimer.current) {
+      clearInterval(uploadTraceTimer.current);
+      uploadTraceTimer.current = null;
+    }
+    await uploadTraceBatch();
+  };
+
+  useEffect(() => {
+    if (isCheckedIn) {
+      startLocationTracking();
+    } else {
+      stopLocationTracking();
+    }
+    return () => {
+      if (collectTraceTimer.current) {
+        clearInterval(collectTraceTimer.current);
+        collectTraceTimer.current = null;
+      }
+      if (uploadTraceTimer.current) {
+        clearInterval(uploadTraceTimer.current);
+        uploadTraceTimer.current = null;
+      }
+    };
+  }, [isCheckedIn, staffProfile?.staff_id]);
 
   const summaryItems = [
     {
@@ -143,9 +266,13 @@ export default function HomeScreen() {
           <Image source={AVATAR} style={styles.avatar} />
           <View style={styles.headerCopy}>
             <Text style={styles.greeting}>{t('goodMorning')}</Text>
-            <Text style={styles.name}>Rahul Sharma</Text>
+            <Text style={styles.name}>{staffProfile?.staff_name ?? 'Staff User'}</Text>
             <View style={styles.roleRow}>
-              <Text style={styles.role}>{t('fieldManager')}</Text>
+              <Text style={styles.role}>
+                {staffProfile
+                  ? `${staffProfile.staff_designation} • ${staffProfile.staff_department}`
+                  : t('fieldManager')}
+              </Text>
               <View style={styles.verifiedBadge}>
                 <Icon name="BadgeCheck" size={16} color={GREEN} />
               </View>
@@ -211,7 +338,7 @@ export default function HomeScreen() {
                   </Text>
                   <View style={styles.locationRow}>
                     <Icon name="MapPin" size={15} color={MUTED} />
-                    <Text style={styles.locationText}>Bori, Durg, Chhattisgarh</Text>
+                    <Text style={styles.locationText}>{currentLocation}</Text>
                   </View>
                   <View style={styles.dateRow}>
                     <Icon name="CalendarDays" size={15} color={MUTED} />

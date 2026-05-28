@@ -15,6 +15,14 @@ import LinearGradient from 'react-native-linear-gradient';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Svg, {Ellipse, G, Path} from 'react-native-svg';
 import Icon from '../components/Icon';
+import {API_BASE_URL} from '../config';
+import {
+  saveSession,
+  type FarmAccess,
+  type FarmDetail,
+  type FarmerDetail,
+  type StaffProfile,
+} from '../auth/session';
 
 const INK = '#161D2B';
 const MUTED = '#717884';
@@ -24,7 +32,7 @@ const BLUE = '#0D3F78';
 const BORDER = '#CED4DB';
 const CARD = '#FFFFFF';
 
-export default function LoginScreen({onLogin}: {onLogin?: () => void}) {
+export default function LoginScreen({onLogin}: {onLogin?: (profile: StaffProfile) => void}) {
   const insets = useSafeAreaInsets();
 
   return (
@@ -73,18 +81,127 @@ export default function LoginScreen({onLogin}: {onLogin?: () => void}) {
   );
 }
 
-function LoginCard({onLogin}: {onLogin?: () => void}) {
+function LoginCard({onLogin}: {onLogin?: (profile: StaffProfile) => void}) {
   const [userId, setUserId] = useState('');
-  const [pin, setPin] = useState('');
+  const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(false);
   const [secure, setSecure] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleLogin = () => {
-    if (!userId.trim() || pin.length !== 4) {
-      Alert.alert('Missing details', 'Please enter your User ID and 4-digit PIN.');
+  const handleLogin = async () => {
+    if (!userId.trim() || !password.trim()) {
+      Alert.alert('Missing details', 'Please enter your User ID and password.');
       return;
     }
-    onLogin?.();
+
+    try {
+      setIsLoading(true);
+      const loginResponse = await fetch(`${API_BASE_URL}/login/login`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          username: userId.trim(),
+          password,
+        }),
+      });
+      const loginData = await loginResponse.json();
+
+      if (!loginResponse.ok || !loginData?.success || !loginData?.token) {
+        throw new Error('Invalid username or password.');
+      }
+
+      const credentialsResponse = await fetch(`${API_BASE_URL}/login/get_credentials`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({token: loginData.token}),
+      });
+      const profile = (await credentialsResponse.json()) as StaffProfile;
+
+      if (
+        !credentialsResponse.ok ||
+        !profile?.staff_id ||
+        !profile?.staff_name ||
+        !profile?.staff_department ||
+        !profile?.staff_designation
+      ) {
+        throw new Error('Unable to fetch staff details.');
+      }
+
+      const farmsResponse = await fetch(
+        `${API_BASE_URL}/feild_manager/get_farms/${encodeURIComponent(profile.staff_id)}`,
+      );
+      const farmAccess = (await farmsResponse.json()) as FarmAccess;
+
+      if (
+        !farmsResponse.ok ||
+        !farmAccess?.manager_id ||
+        !Array.isArray(farmAccess?.assigned_zones) ||
+        !Array.isArray(farmAccess?.block_ids) ||
+        !Array.isArray(farmAccess?.farm_ids) ||
+        typeof farmAccess?.count !== 'number'
+      ) {
+        throw new Error('Unable to fetch assigned farms.');
+      }
+
+      const farmDetailsResponses = await Promise.all(
+        farmAccess.farm_ids.map(farmId =>
+          fetch(`${API_BASE_URL}/farmer_managment/get_farm_details_from_farm_id/${encodeURIComponent(farmId)}`),
+        ),
+      );
+      const farmDetails = (await Promise.all(
+        farmDetailsResponses.map(response => response.json()),
+      )) as FarmDetail[];
+
+      const hasInvalidFarm = farmDetailsResponses.some((response, index) => {
+        const farm = farmDetails[index]?.farm;
+        return (
+          !response.ok ||
+          !farm?.farm_id ||
+          !farm?.farmer_id ||
+          !farm?.crop_type ||
+          typeof farm?.area !== 'number' ||
+          !farm?.land_data?.village ||
+          !farm?.land_data?.district ||
+          !Array.isArray(farm?.land_data?.land_coordinates)
+        );
+      });
+
+      if (hasInvalidFarm) {
+        throw new Error('Unable to fetch farm details.');
+      }
+
+      const farmerDetailsResponses = await Promise.all(
+        farmAccess.farm_ids.map(farmId =>
+          fetch(
+            `${API_BASE_URL}/farmer_managment/get_farmer_details_from_farm_id/${encodeURIComponent(farmId)}`,
+          ),
+        ),
+      );
+      const farmerDetailsList = (await Promise.all(
+        farmerDetailsResponses.map(response => response.json()),
+      )) as FarmerDetail[];
+
+      const hasInvalidFarmer = farmerDetailsResponses.some((response, index) => {
+        const farmer = farmerDetailsList[index]?.farmer;
+        return !response.ok || !farmer?.farmer_id || !farmer?.farmer_name;
+      });
+      if (hasInvalidFarmer) {
+        throw new Error('Unable to fetch farmer details.');
+      }
+
+      const farmerDetailsByFarmId: Record<string, FarmerDetail> = {};
+      farmAccess.farm_ids.forEach((farmId, index) => {
+        farmerDetailsByFarmId[farmId] = farmerDetailsList[index];
+      });
+
+      await saveSession(loginData.token, profile, farmAccess, farmDetails, farmerDetailsByFarmId);
+      onLogin?.(profile);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Login failed. Please try again.';
+      Alert.alert('Login failed', message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -105,18 +222,17 @@ function LoginCard({onLogin}: {onLogin?: () => void}) {
         />
       </View>
 
-      <Text style={styles.label}>4 Digit PIN</Text>
+      <Text style={styles.label}>Password</Text>
       <View style={styles.field}>
         <Icon name="LockKeyhole" size={24} color={GREEN_DARK} />
         <TextInput
-          keyboardType="number-pad"
-          maxLength={4}
-          onChangeText={value => setPin(value.replace(/\D/g, '').slice(0, 4))}
-          placeholder="Enter 4-digit PIN"
+          autoCapitalize="none"
+          onChangeText={setPassword}
+          placeholder="Enter your password"
           placeholderTextColor="#8A9099"
           secureTextEntry={secure}
           style={styles.input}
-          value={pin}
+          value={password}
         />
         <TouchableOpacity
           activeOpacity={0.7}
@@ -137,17 +253,21 @@ function LoginCard({onLogin}: {onLogin?: () => void}) {
           <Text style={styles.rememberText}>Remember me</Text>
         </TouchableOpacity>
         <TouchableOpacity activeOpacity={0.75}>
-          <Text style={styles.forgot}>Forgot PIN?</Text>
+          <Text style={styles.forgot}>Forgot password?</Text>
         </TouchableOpacity>
       </View>
 
-      <TouchableOpacity activeOpacity={0.86} onPress={handleLogin} style={styles.loginButton}>
+      <TouchableOpacity
+        activeOpacity={0.86}
+        disabled={isLoading}
+        onPress={handleLogin}
+        style={styles.loginButton}>
         <LinearGradient
           colors={['#72C927', '#54B51E']}
           start={{x: 0, y: 0.5}}
           end={{x: 1, y: 0.5}}
           style={styles.loginGradient}>
-          <Text style={styles.loginText}>Login</Text>
+          <Text style={styles.loginText}>{isLoading ? 'Signing in...' : 'Login'}</Text>
         </LinearGradient>
       </TouchableOpacity>
 
@@ -157,7 +277,7 @@ function LoginCard({onLogin}: {onLogin?: () => void}) {
         <View style={styles.divider} />
       </View>
 
-      <TouchableOpacity activeOpacity={0.82} onPress={onLogin} style={styles.biometricButton}>
+      <TouchableOpacity activeOpacity={0.82} disabled={isLoading} style={styles.biometricButton}>
         <Icon name="Fingerprint" size={30} color={GREEN_DARK} />
         <Text style={styles.biometricText}>Login with Biometrics</Text>
       </TouchableOpacity>

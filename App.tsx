@@ -14,16 +14,36 @@ import LoginScreen from './src/screens/LoginScreen';
 import MainTabs from './src/navigation/MainTabs';
 import {ThemeProvider} from './src/context/ThemeContext';
 import {LanguageProvider} from './src/context/LanguageContext';
+import {clearSession, loadSession, type StaffProfile} from './src/auth/session';
 
 const Stack = createNativeStackNavigator();
 
 export default function App() {
   const [ready, setReady] = useState(false);
   const [isAuthenticated, setAuthenticated] = useState(false);
+  const [staffProfile, setStaffProfile] = useState<StaffProfile | null>(null);
 
   useEffect(() => {
-    // placeholder for any global initialisation
+    const bootstrap = async () => {
+      const session = await loadSession();
+      if (session) {
+        setStaffProfile(session.profile);
+        setAuthenticated(true);
+      }
+    };
+    bootstrap();
   }, []);
+
+  const handleLogin = (profile: StaffProfile) => {
+    setStaffProfile(profile);
+    setAuthenticated(true);
+  };
+
+  const handleLogout = async () => {
+    await clearSession();
+    setStaffProfile(null);
+    setAuthenticated(false);
+  };
 
   return (
     <GestureHandlerRootView style={{flex: 1}}>
@@ -34,11 +54,11 @@ export default function App() {
           ) : (
             <NavigationContainer>
               {isAuthenticated ? (
-                <MainTabs onLogout={() => setAuthenticated(false)} />
+                <MainTabs onLogout={handleLogout} staffProfile={staffProfile} />
               ) : (
                 <Stack.Navigator screenOptions={{headerShown: false}}>
                   <Stack.Screen name="Login">
-                    {() => <LoginScreen onLogin={() => setAuthenticated(true)} />}
+                    {() => <LoginScreen onLogin={handleLogin} />}
                   </Stack.Screen>
                 </Stack.Navigator>
               )}

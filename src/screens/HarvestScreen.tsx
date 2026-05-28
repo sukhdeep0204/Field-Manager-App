@@ -1,6 +1,9 @@
 import React from 'react';
 import {
+  ActivityIndicator,
   Alert,
+  Image,
+  Linking,
   Modal,
   ScrollView,
   StatusBar,
@@ -10,10 +13,18 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Icon from '../components/Icon';
 import {useLanguage} from '../context/LanguageContext';
+import {loadSession, type FarmDetail, type FarmerDetail} from '../auth/session';
+
+let LeafletWebView: any = null;
+try {
+  LeafletWebView = require('react-native-webview').WebView;
+} catch {
+  LeafletWebView = null;
+}
 
 const INK = '#071126';
 const MUTED = '#34405F';
@@ -167,13 +178,52 @@ const VISIT_ACTIVITY_TYPES = [
   'Other',
 ];
 
-type Land = (typeof LANDS)[number];
+type Land = {
+  id: string;
+  location: string;
+  farmerName: string;
+  crop: string;
+  area: string;
+  owner: string;
+  ownerPhone: string;
+  labourAssigned: string;
+  supervisor: string;
+  soil: string;
+  irrigation: string;
+  district?: string;
+  village?: string;
+  farmingOption?: string;
+  farmerContact?: string;
+  farmerAlternateContact?: string;
+  permanentAddress?: string;
+  coordinates: string;
+  photos: string[];
+  landCoordinates?: number[][];
+  landImageUrls?: string[];
+  landVideoUrl?: string;
+};
 
 export default function HarvestScreen() {
   const insets = useSafeAreaInsets();
   const {language, t} = useLanguage();
+  const [lands, setLands] = useState<Land[]>(LANDS);
+  const [isLoadingLands, setIsLoadingLands] = useState(true);
   const [selectedLand, setSelectedLand] = useState<Land | null>(null);
   const [fieldVisitModalOpen, setFieldVisitModalOpen] = useState(false);
+
+  useEffect(() => {
+    const hydrateLands = async () => {
+      const session = await loadSession();
+      const farmDetails = session?.farmDetails ?? [];
+      const farmerDetails = session?.farmerDetails ?? {};
+
+      if (farmDetails.length > 0) {
+        setLands(mapFarmDetailsToLands(farmDetails, farmerDetails));
+      }
+      setIsLoadingLands(false);
+    };
+    hydrateLands();
+  }, []);
 
   return (
     <View style={styles.root}>
@@ -248,19 +298,27 @@ export default function HarvestScreen() {
           ))}
         </ScrollView>
 
-        <Text style={[styles.sectionTitle, {marginTop: 24}]}>{t('assignedLands')}</Text>
+        <Text style={[styles.sectionTitle, {marginTop: 24}]}>
+          {`${t('assignedLands').split('(')[0].trim()} (${lands.length})`}
+        </Text>
 
         <View style={styles.list}>
-          {LANDS.map(land => (
+          {isLoadingLands ? (
+            <View style={styles.loadingWrap}>
+              <ActivityIndicator size="small" color={GREEN} />
+              <Text style={styles.loadingText}>Loading lands...</Text>
+            </View>
+          ) : null}
+          {lands.map(land => (
             <TouchableOpacity
               key={land.id}
               activeOpacity={0.82}
               onPress={() => setSelectedLand(land)}
               style={styles.card}>
               <View style={styles.details}>
-                <Text style={styles.landId}>{land.id}</Text>
+                <Text style={styles.landId}>{land.farmerName}</Text>
                 <InfoRow label={t('location')} value={land.location} />
-                <InfoRow label={t('farmerName')} value={land.farmerName} />
+                <InfoRow label="Farm ID" value={maskFarmId(land.id)} />
                 <InfoRow label={t('crop')} value={translateLandText(land.crop, language)} />
                 <InfoRow label={t('area')} value={`${land.area} ${t('acres')}`} />
               </View>
@@ -288,6 +346,7 @@ export default function HarvestScreen() {
       />
 
       <FieldVisitEntryModal
+        lands={lands}
         visible={fieldVisitModalOpen}
         onClose={() => setFieldVisitModalOpen(false)}
         onSave={() => {
@@ -300,10 +359,12 @@ export default function HarvestScreen() {
 }
 
 function FieldVisitEntryModal({
+  lands,
   visible,
   onClose,
   onSave,
 }: {
+  lands: Land[];
   visible: boolean;
   onClose: () => void;
   onSave: () => void;
@@ -343,7 +404,7 @@ function FieldVisitEntryModal({
     onSave();
   };
 
-  const landOptions = LANDS.map(l => `${l.id} - ${l.location}`);
+  const landOptions = lands.map(l => `${l.id} - ${l.location}`);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -529,6 +590,110 @@ function FVField({
   );
 }
 
+function mapFarmDetailsToLands(
+  farmDetails: FarmDetail[],
+  farmerDetailsByFarmId: Record<string, FarmerDetail>,
+): Land[] {
+  return farmDetails.map(({farm}) => {
+    const coordinates = farm.land_data.land_coordinates ?? [];
+    const firstPoint = coordinates[0];
+    const locationLabel = `${farm.land_data.village}, ${farm.land_data.district}`;
+    const farmerDetails = farmerDetailsByFarmId[farm.farm_id]?.farmer;
+    const permanentAddress = farmerDetails?.kyc_data?.[0]?.permanent_address || '-';
+
+    return {
+      id: farm.farm_id,
+      location: locationLabel,
+      farmerName: farmerDetails?.farmer_name || farm.farmer_id,
+      crop: farm.crop_type,
+      area: String(farm.area),
+      owner: farmerDetails?.farmer_name || farm.farmer_id,
+      ownerPhone: farmerDetails?.farmer_contact || '-',
+      labourAssigned: '-',
+      supervisor: '-',
+      soil: '-',
+      irrigation: '-',
+      district: farm.land_data.district || '-',
+      village: farm.land_data.village || '-',
+      farmingOption: farmerDetails?.farming_option || farm.land_data.farming_option || '-',
+      farmerContact: farmerDetails?.farmer_contact || '-',
+      farmerAlternateContact: farmerDetails?.farmer_alternate_contact || '-',
+      permanentAddress,
+      coordinates: firstPoint ? `${firstPoint[0]}, ${firstPoint[1]}` : 'Not Available',
+      photos: farm.land_data.land_media?.images?.length
+        ? farm.land_data.land_media.images.map((_, index) => `Image ${index + 1}`)
+        : ['No Images'],
+      landCoordinates: coordinates,
+      landImageUrls: farm.land_data.land_media?.images ?? [],
+      landVideoUrl: farm.land_data.land_media?.video ?? '',
+    };
+  });
+}
+
+function parseCoordinateText(value: string) {
+  const parts = value.split(',').map(item => item.trim());
+  if (parts.length !== 2) {
+    return null;
+  }
+
+  const lat = Number(parts[0]);
+  const lng = Number(parts[1]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return null;
+  }
+
+  return {lat, lng};
+}
+
+function maskFarmId(farmId: string) {
+  return `${farmId.slice(0, 4)}*****`;
+}
+
+function getLeafletHtml(land: Land) {
+  const parsedFromText = parseCoordinateText(land.coordinates);
+  const points =
+    land.landCoordinates && land.landCoordinates.length > 0
+      ? land.landCoordinates
+      : parsedFromText
+        ? [[parsedFromText.lat, parsedFromText.lng]]
+        : [];
+  const jsonPoints = JSON.stringify(points);
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const points = ${jsonPoints};
+    const fallback = [20.5937, 78.9629];
+    const center = points.length ? points[0] : fallback;
+    const map = L.map('map').setView(center, points.length > 1 ? 16 : 17);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    if (points.length === 1) {
+      L.marker(points[0]).addTo(map);
+    } else if (points.length > 1) {
+      const polygon = L.polygon(points, {color: '#058B2D', weight: 2, fillOpacity: 0.2}).addTo(map);
+      map.fitBounds(polygon.getBounds(), {padding: [16, 16]});
+    } else {
+      L.marker(fallback).addTo(map);
+    }
+  </script>
+</body>
+</html>`;
+}
+
 function InfoRow({label, value}: {label: string; value: string}) {
   return (
     <View style={styles.infoRow}>
@@ -572,10 +737,20 @@ function LandDetailsModal({
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalContent}>
             <View style={styles.mapBox}>
-              <View style={styles.mapGrid} />
-              <View style={styles.mapPin}>
-                <Icon name="MapPin" size={25} color="#FFFFFF" />
-              </View>
+              {LeafletWebView ? (
+                <LeafletWebView
+                  originWhitelist={['*']}
+                  source={{html: getLeafletHtml(land)}}
+                  style={styles.mapWebview}
+                  javaScriptEnabled
+                  scrollEnabled={false}
+                />
+              ) : (
+                <View style={styles.mapFallback}>
+                  <Icon name="MapPin" size={22} color={GREEN} />
+                  <Text style={styles.mapFallbackText}>Map preview unavailable</Text>
+                </View>
+              )}
               <View style={styles.mapLabel}>
                 <Text style={styles.mapLabelTitle}>{land.area} {t('acres')}</Text>
                 <Text style={styles.mapLabelSub}>{land.coordinates}</Text>
@@ -589,34 +764,45 @@ function LandDetailsModal({
             <View style={styles.detailBlock}>
               <Text style={styles.blockTitle}>{t('ownerDetails')}</Text>
               <DetailRow label={t('ownerName')} value={land.owner} />
-              <DetailRow label={t('phone')} value={land.ownerPhone} />
-            </View>
-
-            <View style={styles.detailBlock}>
-              <Text style={styles.blockTitle}>{t('staffAssigned')}</Text>
-              <DetailRow label={t('labourAssigned')} value={`${land.labourAssigned} ${t('labourers')}`} />
-              <DetailRow label={t('supervisor')} value={land.supervisor} />
+              <DetailRow label="Farming Option" value={land.farmingOption} />
+              <DetailRow label="Contact" value={land.farmerContact} />
+              <DetailRow label="Alternate Contact" value={land.farmerAlternateContact || '-'} />
+              <DetailRow label="Permanent Address" value={land.permanentAddress || '-'} />
             </View>
 
             <View style={styles.detailBlock}>
               <Text style={styles.blockTitle}>{t('landDetails')}</Text>
-              <DetailRow label={t('farmerName')} value={land.farmerName} />
-              <DetailRow label={t('crop')} value={translateLandText(land.crop, language)} />
               <DetailRow label={t('area')} value={`${land.area} ${t('acres')}`} />
-              <DetailRow label={t('soilType')} value={translateLandText(land.soil, language)} />
+              <DetailRow label={t('crop')} value={translateLandText(land.crop, language)} />
+              <DetailRow label="District" value={land.district} />
+              <DetailRow label="Village" value={land.village} />
             </View>
 
             <View style={styles.photoSection}>
               <Text style={styles.blockTitle}>{t('photographs')}</Text>
-              <View style={styles.photoGrid}>
-                {land.photos.map((photo, index) => (
-                  <View key={photo} style={styles.photoThumb}>
-                    <View style={[styles.photoTone, index === 1 && styles.photoToneAlt]} />
-                    <Icon name="Image" size={22} color="#FFFFFF" />
-                    <Text style={styles.photoText}>{translateLandText(photo, language)}</Text>
-                  </View>
-                ))}
-              </View>
+              {land.landImageUrls && land.landImageUrls.length > 0 ? (
+                <View style={styles.mediaList}>
+                  {land.landImageUrls.map((url, index) => (
+                    <View key={`${url}-${index}`} style={styles.mediaItem}>
+                      <Image source={{uri: url}} style={styles.mediaImage} resizeMode="cover" />
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.mediaEmpty}>No image URLs available</Text>
+              )}
+              <Text style={[styles.blockTitle, {marginTop: 12}]}>Video</Text>
+              {land.landVideoUrl ? (
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  onPress={() => Linking.openURL(land.landVideoUrl as string)}
+                  style={styles.videoLink}>
+                  <Icon name="PlayCircle" size={18} color={BLUE} />
+                  <Text style={styles.videoUrl}>Open Video</Text>
+                </TouchableOpacity>
+              ) : (
+                <Text style={styles.mediaEmpty}>No video URL available</Text>
+              )}
             </View>
           </ScrollView>
         </View>
@@ -886,6 +1072,17 @@ const styles = StyleSheet.create({
     gap: 13,
     marginTop: 13,
   },
+  loadingWrap: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 4,
+  },
+  loadingText: {
+    color: MUTED,
+    fontSize: 13,
+    fontWeight: '700',
+  },
   card: {
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
@@ -1042,25 +1239,23 @@ const styles = StyleSheet.create({
   mapBox: {
     backgroundColor: '#E9F4EC',
     borderRadius: 14,
-    height: 170,
+    height: 220,
     overflow: 'hidden',
   },
-  mapGrid: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#DDEFE4',
-    borderColor: '#C5DEC9',
-    borderWidth: 1,
+  mapWebview: {
+    flex: 1,
   },
-  mapPin: {
+  mapFallback: {
     alignItems: 'center',
-    backgroundColor: GREEN,
-    borderRadius: 22,
-    height: 44,
+    backgroundColor: '#E9F4EC',
+    flex: 1,
+    gap: 8,
     justifyContent: 'center',
-    left: '46%',
-    position: 'absolute',
-    top: 52,
-    width: 44,
+  },
+  mapFallbackText: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '700',
   },
   mapLabel: {
     backgroundColor: '#FFFFFF',
@@ -1165,35 +1360,52 @@ const styles = StyleSheet.create({
   photoSection: {
     marginTop: 13,
   },
-  photoGrid: {
-    flexDirection: 'row',
-    gap: 9,
+  mediaList: {
+    gap: 10,
   },
-  photoThumb: {
-    alignItems: 'center',
-    backgroundColor: '#244A31',
+  mediaItem: {
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
     borderRadius: 12,
-    flex: 1,
-    height: 88,
-    justifyContent: 'center',
+    borderWidth: 1,
     overflow: 'hidden',
-    paddingHorizontal: 6,
+    paddingBottom: 8,
   },
-  photoTone: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#4C8B59',
-    opacity: 0.72,
+  mediaImage: {
+    height: 140,
+    width: '100%',
   },
-  photoToneAlt: {
-    backgroundColor: '#2F6F8E',
+  mediaUrl: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: 8,
+    paddingHorizontal: 10,
   },
-  photoText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '900',
-    lineHeight: 14,
-    marginTop: 7,
-    textAlign: 'center',
+  mediaEmpty: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  videoLink: {
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    borderColor: '#DBEAFE',
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  videoUrl: {
+    color: BLUE,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
   },
   fvModalOverlay: {
     flex: 1,
