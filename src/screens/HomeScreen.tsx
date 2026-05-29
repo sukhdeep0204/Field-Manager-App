@@ -2,6 +2,8 @@ import {
   Alert,
   Image,
   Modal,
+  PermissionsAndroid,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -166,7 +168,7 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
     }
     console.log(`[tracking] upload start  staff=${staffProfile.staff_id}  points=${pointCount}`);
     try {
-      const response = await fetch(`${API_BASE_URL}/admin_staff/append_staff_location_tracking`, {
+      const response = await fetch(`${API_BASE_URL}/admin_staff/append_staff_location_tracing`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
@@ -191,32 +193,56 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
 
   const startLocationTracking = async () => {
     console.log('[tracking] ── start requested ──');
-    Geolocation.requestAuthorization();
-    console.log('[tracking] requestAuthorization sent');
-
-    const collect = async () => {
-      console.log('[tracking] collect tick');
-      const point = await getCurrentCoordinates();
-      if (!point) {
-        console.log('[tracking] collect tick — no fix, skipping append');
-        setCurrentLocation(TRACKING_UNAVAILABLE_TEXT);
-        return;
+    try {
+      if (Platform.OS === 'android') {
+        const already = await PermissionsAndroid.check(
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        );
+        if (!already) {
+          const result = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+            {
+              title: 'Location Permission',
+              message: 'Field Manager needs your location to track field visits.',
+              buttonNeutral: 'Ask Me Later',
+              buttonNegative: 'Deny',
+              buttonPositive: 'Allow',
+            },
+          );
+          if (result !== PermissionsAndroid.RESULTS.GRANTED) {
+            console.log('[tracking] permission denied — stopping');
+            return;
+          }
+        }
       }
-      setCurrentLocation(`${point.lat.toFixed(6)}, ${point.long.toFixed(6)}`);
-      await appendTracePointToCache(point);
-    };
+      console.log('[tracking] permission ok');
 
-    console.log('[tracking] initial collect');
-    await collect();
+      const collect = async () => {
+        console.log('[tracking] collect tick');
+        const point = await getCurrentCoordinates();
+        if (!point) {
+          console.log('[tracking] collect tick — no fix, skipping append');
+          setCurrentLocation(TRACKING_UNAVAILABLE_TEXT);
+          return;
+        }
+        setCurrentLocation(`${point.lat.toFixed(6)}, ${point.long.toFixed(6)}`);
+        await appendTracePointToCache(point);
+      };
 
-    collectTraceTimer.current = setInterval(() => {
-      collect();
-    }, 2000);
-    uploadTraceTimer.current = setInterval(() => {
-      uploadTraceBatch();
-    }, 60000);
+      console.log('[tracking] initial collect');
+      await collect();
 
-    console.log('[tracking] timers started  collect=2s  upload=60s');
+      collectTraceTimer.current = setInterval(() => {
+        collect();
+      }, 2000);
+      uploadTraceTimer.current = setInterval(() => {
+        uploadTraceBatch();
+      }, 10000);
+
+      console.log('[tracking] timers started  collect=2s  upload=10s');
+    } catch (err) {
+      console.log('[tracking] startLocationTracking error:', err);
+    }
   };
 
   const stopLocationTracking = async () => {
