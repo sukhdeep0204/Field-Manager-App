@@ -1,5 +1,6 @@
 import {
   Alert,
+  FlatList,
   Image,
   Linking,
   Modal,
@@ -17,7 +18,7 @@ import {Camera, CameraType, type CameraApi} from 'react-native-camera-kit';
 import Icon from '../components/Icon';
 import { useLanguage } from '../context/LanguageContext';
 import {API_BASE_URL} from '../config';
-import {loadSession, type FarmDetail} from '../auth/session';
+import {loadSession, type FarmDetail, type FarmerDetail} from '../auth/session';
 
 const INK = '#070B1A';
 const MUTED = '#43506F';
@@ -92,6 +93,39 @@ type ApiTask = {
   }>;
 };
 
+type ApiFieldVisitTask = {
+  task_id: string;
+  feild_id: string[];
+  assigned_acres: Array<{
+    date: string;
+    activity: string;
+    assigned_acres: number;
+    farm_id: string;
+  }>;
+  allocation_schema: Array<{
+    allocated_acres: number;
+    farm_id: string;
+    completed_acres: number;
+  }>;
+  created_at: string;
+};
+
+type FieldVisit = {
+  id: string;
+  landId: string;
+  location: string;
+  farmerName: string;
+  activity: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  color: string;
+  bg: string;
+  items: Array<{ name: string; expected: number }>;
+  borewells: number;
+  assignedAcres: number;
+  allocatedAcres: number;
+};
+
 type TransportVehicle = {
   vehicle_number: string;
   vehicle_model: string;
@@ -136,9 +170,12 @@ export default function TasksScreen() {
   const [statusOverrides, setStatusOverrides] = useState<
     Record<string, string>
   >({});
-  const [selectedVisit, setSelectedVisit] = useState<typeof UPCOMING_FIELD_VISITS[number] | null>(null);
+  const [selectedVisit, setSelectedVisit] = useState<FieldVisit | null>(null);
   const [apiTasks, setApiTasks] = useState<Task[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [fieldVisitTasks, setFieldVisitTasks] = useState<FieldVisit[]>([]);
+  const [fieldVisitsLoaded, setFieldVisitsLoaded] = useState(false);
+  const [fieldVisitsLoading, setFieldVisitsLoading] = useState(false);
 
   const fetchTasks = async () => {
     try {
@@ -175,6 +212,84 @@ export default function TasksScreen() {
     setRefreshing(false);
   };
 
+  const fetchFieldVisits = async () => {
+    try {
+      setFieldVisitsLoading(true);
+      const session = await loadSession();
+      const farmIds = session?.farmAccess?.farm_ids ?? [];
+      const farmDetails = session?.farmDetails ?? [];
+      const farmerDetails = session?.farmerDetails ?? ({} as Record<string, FarmerDetail>);
+      if (!farmIds.length) {
+        return;
+      }
+
+      const response = await fetch(`${API_BASE_URL}/admin_all_task/get_all_field_visit_tasks`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({farm_id: farmIds}),
+      });
+      const data = await response.json();
+      if (!response.ok || !Array.isArray(data)) {
+        return;
+      }
+
+      const locationByFarmId = new Map(
+        farmDetails.map(item => [
+          item.farm.farm_id,
+          `${item.farm.land_data.village}, ${item.farm.land_data.district}`,
+        ]),
+      );
+      const farmerIdByFarmId = new Map(
+        farmDetails.map(item => [item.farm.farm_id, item.farm.farmer_id]),
+      );
+
+      const visitColors = [
+        {color: ORANGE_TEXT, bg: '#FFF4EE'},
+        {color: BLUE, bg: BLUE_SOFT},
+        {color: GREEN, bg: GREEN_SOFT},
+      ];
+
+      const mapped: FieldVisit[] = (data as ApiFieldVisitTask[]).map((task, index) => {
+        const firstAssigned = task.assigned_acres?.[0];
+        const farmId = firstAssigned?.farm_id || task.feild_id?.[0] || '-';
+        const farmerId = farmerIdByFarmId.get(farmId);
+        const farmerName = farmerId
+          ? (farmerDetails[farmerId]?.farmer?.farmer_name || '-')
+          : '-';
+        const {color, bg} = visitColors[index % visitColors.length];
+
+        return {
+          id: task.task_id,
+          landId: farmId,
+          location: locationByFarmId.get(farmId) || '-',
+          farmerName,
+          activity: firstAssigned?.activity || 'Field Visit',
+          scheduledDate: firstAssigned?.date || '-',
+          scheduledTime: '-',
+          color,
+          bg,
+          items: [],
+          borewells: 0,
+          assignedAcres: firstAssigned?.assigned_acres ?? 0,
+          allocatedAcres: task.allocation_schema?.[0]?.allocated_acres ?? 0,
+        };
+      });
+
+      setFieldVisitTasks(mapped);
+      setFieldVisitsLoaded(true);
+    } catch {
+      // keep empty list
+    } finally {
+      setFieldVisitsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (topView === 'fieldvisits' && !fieldVisitsLoaded) {
+      fetchFieldVisits();
+    }
+  }, [topView]);
+
   const taskSource = apiTasks.length ? apiTasks : flattenGroups(TASK_GROUPS);
   const assignedTasks = taskSource.filter(
     task => task.status.toLowerCase() === 'assigned' || task.status.toLowerCase() === 'in progress',
@@ -193,10 +308,171 @@ export default function TasksScreen() {
   const assignedTaskCount = assignedTasks.length;
   const pendingTaskCount = pendingTasks.length;
 
+  const cardColor = activeTab === 'completed' ? GREEN : activeTab === 'pending' ? ORANGE_TEXT : BLUE;
+  const cardBg = activeTab === 'completed' ? GREEN_SOFT : activeTab === 'pending' ? '#FFF7ED' : BLUE_SOFT;
+  const cardBorderColor = activeTab === 'completed' ? GREEN_BORDER : activeTab === 'pending' ? '#FED7AA' : BLUE_BORDER;
+
   return (
     <View style={styles.root}>
-      <ScrollView
+      <FlatList
         style={styles.scroll}
+        data={topView === 'tasks' ? visibleTasks : []}
+        keyExtractor={(task) => `${task.farmId}-${task.dueTime}-${task.title}`}
+        renderItem={({ item: task }) => (
+          <TaskCard
+            task={task}
+            color={cardColor}
+            cardBg={cardBg}
+            borderColor={cardBorderColor}
+            onPress={() => setSelectedTask(task)}
+          />
+        )}
+        ListHeaderComponent={(
+          <View>
+            <View style={styles.header}>
+              <View style={styles.headerCopy}>
+                <Text style={styles.title}>{t('tasks')}</Text>
+                <Text style={styles.subtitle}>{t('tasksSubtitle')}</Text>
+              </View>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() =>
+                  Alert.alert(t('notifications'), t('taskNotifications'))
+                }
+                style={styles.bellButton}
+              >
+                <Icon name="Bell" size={24} color={INK} />
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationText}>3</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.switchBar}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => setTopView('tasks')}
+                style={[styles.switchBtn, topView === 'tasks' && styles.switchBtnActive]}
+              >
+                <Icon name="ClipboardList" size={15} color={topView === 'tasks' ? '#FFFFFF' : MUTED} />
+                <Text style={[styles.switchText, topView === 'tasks' && styles.switchTextActive]}>Tasks</Text>
+                <View style={[styles.switchCount, topView === 'tasks' && styles.switchCountActive]}>
+                  <Text style={[styles.switchCountText, topView === 'tasks' && styles.switchCountTextActive]}>
+                    {assignedTaskCount + pendingTaskCount}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => setTopView('fieldvisits')}
+                style={[styles.switchBtn, topView === 'fieldvisits' && styles.switchBtnActive]}
+              >
+                <Icon name="MapPin" size={15} color={topView === 'fieldvisits' ? '#FFFFFF' : MUTED} />
+                <Text style={[styles.switchText, topView === 'fieldvisits' && styles.switchTextActive]}>Field Visits</Text>
+                <View style={[styles.switchCount, topView === 'fieldvisits' && styles.switchCountActive]}>
+                  <Text style={[styles.switchCountText, topView === 'fieldvisits' && styles.switchCountTextActive]}>
+                    {fieldVisitTasks.length}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {topView === 'tasks' ? (
+              <>
+                <View style={styles.tabs}>
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={() => setActiveTab('assigned')}
+                    style={styles.tabButton}
+                  >
+                    <Text style={[styles.tabText, activeTab === 'assigned' && styles.activeTabText]}>
+                      {t('assigned')} ({assignedTaskCount})
+                    </Text>
+                    {activeTab === 'assigned' ? <View style={styles.activeIndicator} /> : null}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={() => setActiveTab('pending')}
+                    style={styles.tabButton}
+                  >
+                    <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>
+                      {t('pending')} ({pendingTaskCount})
+                    </Text>
+                    {activeTab === 'pending' ? <View style={styles.activeIndicator} /> : null}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.75}
+                    onPress={() => setActiveTab('completed')}
+                    style={styles.tabButton}
+                  >
+                    <Text style={[styles.tabText, activeTab === 'completed' && styles.activeTabText]}>
+                      {t('completed')}
+                    </Text>
+                    {activeTab === 'completed' ? <View style={styles.activeIndicator} /> : null}
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.group}>
+                  <Text style={[styles.groupTitle, { color: activeTab === 'completed' ? GREEN : ORANGE_TEXT }]}>
+                    {activeTab === 'completed' ? t('completed') : activeTab === 'pending' ? t('pending') : t('assigned')}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.fvSectionHeader}>
+                  <Text style={styles.fvSectionTitle}>Upcoming Field Visits</Text>
+                  <View style={styles.fvCountBadge}>
+                    <Text style={styles.fvCountText}>{fieldVisitTasks.length}</Text>
+                  </View>
+                </View>
+
+                {fieldVisitsLoading ? (
+                  <View style={styles.emptyVisitsBox}>
+                    <Text style={styles.emptyVisitsText}>Loading field visits...</Text>
+                  </View>
+                ) : fieldVisitTasks.length === 0 ? (
+                  <View style={styles.emptyVisitsBox}>
+                    <Icon name="CalendarCheck" size={32} color={MUTED} />
+                    <Text style={styles.emptyVisitsText}>No upcoming field visits.</Text>
+                  </View>
+                ) : fieldVisitTasks.map(visit => (
+                  <TouchableOpacity
+                    key={visit.id}
+                    activeOpacity={0.82}
+                    onPress={() => setSelectedVisit(visit)}
+                    style={[styles.visitCard, { backgroundColor: visit.bg, borderColor: visit.color + '50' }]}
+                  >
+                    <View style={styles.visitCardTop}>
+                      <View style={[styles.visitDot, { backgroundColor: visit.color }]} />
+                      <Text style={[styles.visitActivity, { color: visit.color }]} numberOfLines={1}>
+                        {visit.activity}
+                      </Text>
+                      <View style={[styles.visitTimePill, { backgroundColor: visit.color + '20' }]}>
+                        <Icon name="Clock3" size={11} color={visit.color} />
+                        <Text style={[styles.visitTimePillText, { color: visit.color }]}>
+                          {visit.scheduledDate}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.visitLandId}>{visit.landId}</Text>
+                    <Text style={styles.visitFarmer}>{visit.farmerName}</Text>
+                    <View style={styles.visitRow}>
+                      <Icon name="MapPin" size={13} color={MUTED} />
+                      <Text style={styles.visitMeta}>{visit.location}</Text>
+                    </View>
+                    <View style={styles.visitFooterRow}>
+                      <View style={styles.visitPill}>
+                        <Icon name="Sprout" size={12} color={MUTED} />
+                        <Text style={styles.visitPillText}>{visit.assignedAcres} acres</Text>
+                      </View>
+                      <Text style={[styles.visitTapHintText, { color: visit.color, marginLeft: 'auto' as const }]}>Tap to log →</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+          </View>
+        )}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -210,166 +486,10 @@ export default function TasksScreen() {
           { paddingTop: insets.top + 18, paddingBottom: insets.bottom + 112 },
         ]}
         showsVerticalScrollIndicator={false}
-      >
-        <View style={styles.header}>
-          <View style={styles.headerCopy}>
-            <Text style={styles.title}>{t('tasks')}</Text>
-            <Text style={styles.subtitle}>{t('tasksSubtitle')}</Text>
-          </View>
-          <TouchableOpacity
-            activeOpacity={0.75}
-            onPress={() =>
-              Alert.alert(t('notifications'), t('taskNotifications'))
-            }
-            style={styles.bellButton}
-          >
-            <Icon name="Bell" size={24} color={INK} />
-            <View style={styles.notificationBadge}>
-              <Text style={styles.notificationText}>3</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-
-        {/* Top switch bar */}
-        <View style={styles.switchBar}>
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setTopView('tasks')}
-            style={[styles.switchBtn, topView === 'tasks' && styles.switchBtnActive]}
-          >
-            <Icon name="ClipboardList" size={15} color={topView === 'tasks' ? '#FFFFFF' : MUTED} />
-            <Text style={[styles.switchText, topView === 'tasks' && styles.switchTextActive]}>Tasks</Text>
-            <View style={[styles.switchCount, topView === 'tasks' && styles.switchCountActive]}>
-              <Text style={[styles.switchCountText, topView === 'tasks' && styles.switchCountTextActive]}>
-                {assignedTaskCount + pendingTaskCount}
-              </Text>
-            </View>
-          </TouchableOpacity>
-          <TouchableOpacity
-            activeOpacity={0.8}
-            onPress={() => setTopView('fieldvisits')}
-            style={[styles.switchBtn, topView === 'fieldvisits' && styles.switchBtnActive]}
-          >
-            <Icon name="MapPin" size={15} color={topView === 'fieldvisits' ? '#FFFFFF' : MUTED} />
-            <Text style={[styles.switchText, topView === 'fieldvisits' && styles.switchTextActive]}>Field Visits</Text>
-            <View style={[styles.switchCount, topView === 'fieldvisits' && styles.switchCountActive]}>
-              <Text style={[styles.switchCountText, topView === 'fieldvisits' && styles.switchCountTextActive]}>
-                {UPCOMING_FIELD_VISITS.length}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-
-        {topView === 'tasks' ? (
-          <>
-            {/* Sub-tabs */}
-            <View style={styles.tabs}>
-              <TouchableOpacity
-                activeOpacity={0.75}
-                onPress={() => setActiveTab('assigned')}
-                style={styles.tabButton}
-              >
-                <Text style={[styles.tabText, activeTab === 'assigned' && styles.activeTabText]}>
-                  {t('assigned')} ({assignedTaskCount})
-                </Text>
-                {activeTab === 'assigned' ? <View style={styles.activeIndicator} /> : null}
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.75}
-                onPress={() => setActiveTab('pending')}
-                style={styles.tabButton}
-              >
-                <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>
-                  {t('pending')} ({pendingTaskCount})
-                </Text>
-                {activeTab === 'pending' ? <View style={styles.activeIndicator} /> : null}
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.75}
-                onPress={() => setActiveTab('completed')}
-                style={styles.tabButton}
-              >
-                <Text style={[styles.tabText, activeTab === 'completed' && styles.activeTabText]}>
-                  {t('completed')}
-                </Text>
-                {activeTab === 'completed' ? <View style={styles.activeIndicator} /> : null}
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.group}>
-              <Text style={[styles.groupTitle, { color: activeTab === 'completed' ? GREEN : ORANGE_TEXT }]}>
-                {activeTab === 'completed' ? t('completed') : activeTab === 'pending' ? t('pending') : t('assigned')}
-              </Text>
-              {visibleTasks.map(task => (
-                <TaskCard
-                  key={`${task.farmId}-${task.dueTime}-${task.title}`}
-                  task={task}
-                  color={activeTab === 'completed' ? GREEN : activeTab === 'pending' ? ORANGE_TEXT : BLUE}
-                  cardBg={activeTab === 'completed' ? GREEN_SOFT : activeTab === 'pending' ? '#FFF7ED' : BLUE_SOFT}
-                  borderColor={activeTab === 'completed' ? GREEN_BORDER : activeTab === 'pending' ? '#FED7AA' : BLUE_BORDER}
-                  onPress={() => setSelectedTask(task)}
-                />
-              ))}
-            </View>
-          </>
-        ) : (
-          <>
-            {/* Upcoming visits */}
-            <View style={styles.fvSectionHeader}>
-              <Text style={styles.fvSectionTitle}>Upcoming Field Visits</Text>
-              <View style={styles.fvCountBadge}>
-                <Text style={styles.fvCountText}>{UPCOMING_FIELD_VISITS.length}</Text>
-              </View>
-            </View>
-
-            {UPCOMING_FIELD_VISITS.map(visit => (
-              <TouchableOpacity
-                key={visit.id}
-                activeOpacity={0.82}
-                onPress={() => setSelectedVisit(visit)}
-                style={[styles.visitCard, { backgroundColor: visit.bg, borderColor: visit.color + '50' }]}
-              >
-                <View style={styles.visitCardTop}>
-                  <View style={[styles.visitDot, { backgroundColor: visit.color }]} />
-                  <Text style={[styles.visitActivity, { color: visit.color }]} numberOfLines={1}>
-                    {visit.activity}
-                  </Text>
-                  <View style={[styles.visitTimePill, { backgroundColor: visit.color + '20' }]}>
-                    <Icon name="Clock3" size={11} color={visit.color} />
-                    <Text style={[styles.visitTimePillText, { color: visit.color }]}>
-                      {visit.scheduledDate}, {visit.scheduledTime}
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.visitLandId}>{visit.landId}</Text>
-                <Text style={styles.visitFarmer}>{visit.farmerName}</Text>
-                <View style={styles.visitRow}>
-                  <Icon name="MapPin" size={13} color={MUTED} />
-                  <Text style={styles.visitMeta}>{visit.location}</Text>
-                </View>
-                <View style={styles.visitFooterRow}>
-                  <View style={styles.visitPill}>
-                    <Icon name="Package" size={12} color={MUTED} />
-                    <Text style={styles.visitPillText}>{visit.items.length} items</Text>
-                  </View>
-                  <View style={styles.visitPill}>
-                    <Icon name="Droplets" size={12} color={MUTED} />
-                    <Text style={styles.visitPillText}>{visit.borewells} borewell{visit.borewells !== 1 ? 's' : ''}</Text>
-                  </View>
-                  <Text style={[styles.visitTapHintText, { color: visit.color, marginLeft: 'auto' as const }]}>Tap to log →</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-
-            {/* Past visits placeholder */}
-            <Text style={[styles.fvSectionTitle, { marginTop: 24, marginBottom: 12 }]}>Past Visits</Text>
-            <View style={styles.emptyVisitsBox}>
-              <Icon name="CalendarCheck" size={32} color={MUTED} />
-              <Text style={styles.emptyVisitsText}>No past field visits recorded yet.</Text>
-            </View>
-          </>
-        )}
-      </ScrollView>
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+      />
 
       <VisitDetailModal
         visit={selectedVisit}
@@ -1520,7 +1640,7 @@ function VisitDetailModal({
   onClose,
   onSave,
 }: {
-  visit: typeof UPCOMING_FIELD_VISITS[number] | null;
+  visit: FieldVisit | null;
   onClose: () => void;
   onSave: () => void;
 }) {

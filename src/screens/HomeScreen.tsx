@@ -2,8 +2,6 @@ import {
   Alert,
   Image,
   Modal,
-  PermissionsAndroid,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -11,6 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import Geolocation from '@react-native-community/geolocation';
 import {useEffect, useRef, useState} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useNavigation} from '@react-navigation/native';
@@ -19,13 +18,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Icon from '../components/Icon';
 import {useLanguage} from '../context/LanguageContext';
 import {type StaffProfile} from '../auth/session';
-import Geolocation from '@react-native-community/geolocation';
 import {API_BASE_URL} from '../config';
-
-Geolocation.setRNConfiguration({
-  skipPermissionRequests: true,
-  authorizationLevel: 'whenInUse',
-});
 
 const AVATAR = require('../assets/rahul-sharma-avatar.png');
 const LOGO_3F = require('../assets/logo-3f.png');
@@ -45,6 +38,24 @@ const PURPLE_SOFT = '#F3E9FF';
 const PURPLE_BORDER = '#D8B4FE';
 const CARD_BORDER = '#E7EDF0';
 const TRACE_CACHE_KEY = '@staff_location_trace_buffer';
+const MIN_POINT_DISTANCE_METERS = 5;
+const MIN_POINT_TIME_MS = 30000;
+const TRACKING_UNAVAILABLE_TEXT = 'Location tracking unavailable';
+
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number) {
+  const toRad = (value: number) => (value * Math.PI) / 180;
+  const earthRadius = 6371000;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return earthRadius * c;
+}
 
 export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile | null}) {
   const insets = useSafeAreaInsets();
@@ -83,39 +94,79 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
 
   const getCurrentCoordinates = () =>
     new Promise<{lat: number; long: number} | null>(resolve => {
+      console.log('[tracking] getCurrentCoordinates → requesting fix');
       Geolocation.getCurrentPosition(
         position => {
           const lat = Number(position?.coords?.latitude);
           const long = Number(position?.coords?.longitude);
+          const accuracy = position?.coords?.accuracy ?? -1;
+          console.log(
+            `[tracking] fix ok  lat=${lat.toFixed(6)}  long=${long.toFixed(6)}  accuracy=${accuracy.toFixed(1)}m`,
+          );
           if (Number.isFinite(lat) && Number.isFinite(long)) {
             resolve({lat, long});
           } else {
+            console.log('[tracking] fix has non-finite coords, skipping');
             resolve(null);
           }
         },
-        () => resolve(null),
-        {enableHighAccuracy: false, timeout: 10000, maximumAge: 120000},
+        error => {
+          console.log(
+            `[tracking] fix failed  code=${error.code}  msg=${error.message}`,
+          );
+          resolve(null);
+        },
+        {enableHighAccuracy: true, timeout: 15000, maximumAge: 0},
       );
     });
 
   const appendTracePointToCache = async (point: {lat: number; long: number}) => {
     const raw = await AsyncStorage.getItem(TRACE_CACHE_KEY);
     const tracerData = raw ? (JSON.parse(raw) as Record<string, {lat: number; long: number}>) : {};
-    tracerData[new Date().toISOString()] = point;
+    const sortedKeys = Object.keys(tracerData).sort();
+    const latestTimestamp = sortedKeys.pop();
+
+    if (latestTimestamp) {
+      const previous = tracerData[latestTimestamp];
+      const distanceM = haversineMeters(previous.lat, previous.long, point.lat, point.long);
+      const timeDeltaMs = Date.now() - new Date(latestTimestamp).getTime();
+
+      if (distanceM < MIN_POINT_DISTANCE_METERS && timeDeltaMs < MIN_POINT_TIME_MS) {
+        console.log(
+          `[tracking] de-dup skip  dist=${distanceM.toFixed(1)}m  age=${(timeDeltaMs / 1000).toFixed(0)}s  (threshold ${MIN_POINT_DISTANCE_METERS}m / ${MIN_POINT_TIME_MS / 1000}s)`,
+        );
+        return;
+      }
+      console.log(
+        `[tracking] append point  dist=${distanceM.toFixed(1)}m  age=${(timeDeltaMs / 1000).toFixed(0)}s`,
+      );
+    } else {
+      console.log('[tracking] append first point (cache was empty)');
+    }
+
+    const now = new Date().toISOString();
+    tracerData[now] = point;
     await AsyncStorage.setItem(TRACE_CACHE_KEY, JSON.stringify(tracerData));
+    console.log(
+      `[tracking] cache size=${Object.keys(tracerData).length}  latest=${now}`,
+    );
   };
 
   const uploadTraceBatch = async () => {
     if (!staffProfile?.staff_id) {
+      console.log('[tracking] upload skip — no staff_id');
       return;
     }
     const raw = await AsyncStorage.getItem(TRACE_CACHE_KEY);
     const tracerData = raw ? (JSON.parse(raw) as Record<string, {lat: number; long: number}>) : {};
-    if (!Object.keys(tracerData).length) {
+    const pointCount = Object.keys(tracerData).length;
+    if (!pointCount) {
+      console.log('[tracking] upload skip — cache empty');
       return;
     }
+    console.log(`[tracking] upload start  staff=${staffProfile.staff_id}  points=${pointCount}`);
     try {
-      const response = await fetch(`${API_BASE_URL}/admin_staff/append_staff_location_tracing`, {
+      const response = await fetch(`${API_BASE_URL}/admin_staff/append_staff_location_tracking`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
@@ -124,51 +175,63 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
         }),
       });
       const data = await response.json();
+      console.log(
+        `[tracking] upload response  status=${response.status}  success=${data?.success}`,
+      );
       if (response.ok && data?.success !== false) {
         await AsyncStorage.removeItem(TRACE_CACHE_KEY);
+        console.log(`[tracking] upload done  ${pointCount} points sent, cache cleared`);
+      } else {
+        console.log('[tracking] upload rejected by server, keeping cache for retry');
       }
-    } catch {
-      // keep cached data for next retry
+    } catch (error) {
+      console.log('[tracking] upload error (will retry next interval)', error);
     }
   };
 
   const startLocationTracking = async () => {
-    if (Platform.OS === 'android') {
-      const permission = await PermissionsAndroid.request(
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      );
-      if (permission !== PermissionsAndroid.RESULTS.GRANTED) {
-        return;
-      }
-    }
+    console.log('[tracking] ── start requested ──');
+    Geolocation.requestAuthorization();
+    console.log('[tracking] requestAuthorization sent');
 
     const collect = async () => {
+      console.log('[tracking] collect tick');
       const point = await getCurrentCoordinates();
       if (!point) {
+        console.log('[tracking] collect tick — no fix, skipping append');
+        setCurrentLocation(TRACKING_UNAVAILABLE_TEXT);
         return;
       }
       setCurrentLocation(`${point.lat.toFixed(6)}, ${point.long.toFixed(6)}`);
       await appendTracePointToCache(point);
     };
 
+    console.log('[tracking] initial collect');
     await collect();
+
     collectTraceTimer.current = setInterval(() => {
       collect();
     }, 2000);
     uploadTraceTimer.current = setInterval(() => {
       uploadTraceBatch();
-    }, 10000);
+    }, 60000);
+
+    console.log('[tracking] timers started  collect=2s  upload=60s');
   };
 
   const stopLocationTracking = async () => {
+    console.log('[tracking] ── stop requested ──');
     if (collectTraceTimer.current) {
       clearInterval(collectTraceTimer.current);
       collectTraceTimer.current = null;
+      console.log('[tracking] collect timer cleared');
     }
     if (uploadTraceTimer.current) {
       clearInterval(uploadTraceTimer.current);
       uploadTraceTimer.current = null;
+      console.log('[tracking] upload timer cleared');
     }
+    console.log('[tracking] final upload on stop');
     await uploadTraceBatch();
   };
 
