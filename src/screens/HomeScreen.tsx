@@ -1,9 +1,11 @@
 import {
   Alert,
+  Animated,
   Image,
   Modal,
   PermissionsAndroid,
   Platform,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -11,7 +13,12 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import Geolocation from '@react-native-community/geolocation';
+let Geolocation: any = null;
+try {
+  Geolocation = require('@react-native-community/geolocation').default;
+} catch {
+  console.log('[tracking] @react-native-community/geolocation not linked — GPS unavailable');
+}
 import {useEffect, useRef, useState} from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {useNavigation} from '@react-navigation/native';
@@ -40,7 +47,7 @@ const PURPLE_SOFT = '#F3E9FF';
 const PURPLE_BORDER = '#D8B4FE';
 const CARD_BORDER = '#E7EDF0';
 const TRACE_CACHE_KEY = '@staff_location_trace_buffer';
-const MIN_POINT_DISTANCE_METERS = 5;
+const MIN_POINT_DISTANCE_METERS = 2;
 const MIN_POINT_TIME_MS = 30000;
 const TRACKING_UNAVAILABLE_TEXT = 'Location tracking unavailable';
 
@@ -70,6 +77,51 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
   const [reimbursementOpen, setReimbursementOpen] = useState(false);
   const [ticketOpen, setTicketOpen] = useState(false);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const [issueModalOpen, setIssueModalOpen] = useState(false);
+  const [toastVisible, setToastVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const toastAnim = useRef(new Animated.Value(0)).current;
+  const [issuedItems, setIssuedItems] = useState<ApiIssuedItem[]>([]);
+  const [issuedLoading, setIssuedLoading] = useState(false);
+
+  const showToast = () => {
+    setToastVisible(true);
+    Animated.sequence([
+      Animated.timing(toastAnim, {toValue: 1, duration: 300, useNativeDriver: true}),
+      Animated.delay(2500),
+      Animated.timing(toastAnim, {toValue: 0, duration: 300, useNativeDriver: true}),
+    ]).start(() => setToastVisible(false));
+  };
+
+  const fetchIssuedItems = async (staffId: string) => {
+    if (!staffId) { return; }
+    try {
+      setIssuedLoading(true);
+      const res = await fetch(`${API_BASE_URL}/inventory/get_my_issued_items/${encodeURIComponent(staffId)}`);
+      const data = await res.json();
+      if (res.ok && Array.isArray(data?.issued_items)) {
+        setIssuedItems(data.issued_items as ApiIssuedItem[]);
+      }
+    } catch {
+      // keep previous list
+    } finally {
+      setIssuedLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (staffProfile?.staff_id) {
+      fetchIssuedItems(staffProfile.staff_id);
+    }
+  }, [staffProfile?.staff_id]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    if (staffProfile?.staff_id) {
+      await fetchIssuedItems(staffProfile.staff_id);
+    }
+    setRefreshing(false);
+  };
   const collectTraceTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const uploadTraceTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const calendarCells = [
@@ -96,6 +148,11 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
 
   const getCurrentCoordinates = () =>
     new Promise<{lat: number; long: number} | null>(resolve => {
+      if (!Geolocation?.getCurrentPosition) {
+        console.log('[tracking] getCurrentCoordinates — module not linked, skipping');
+        resolve(null);
+        return;
+      }
       console.log('[tracking] getCurrentCoordinates → requesting fix');
       Geolocation.getCurrentPosition(
         position => {
@@ -105,12 +162,17 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
           console.log(
             `[tracking] fix ok  lat=${lat.toFixed(6)}  long=${long.toFixed(6)}  accuracy=${accuracy.toFixed(1)}m`,
           );
-          if (Number.isFinite(lat) && Number.isFinite(long)) {
-            resolve({lat, long});
-          } else {
+          if (!Number.isFinite(lat) || !Number.isFinite(long)) {
             console.log('[tracking] fix has non-finite coords, skipping');
             resolve(null);
+            return;
           }
+          if (accuracy > 15) {
+            console.log(`[tracking] fix rejected — accuracy ${accuracy.toFixed(1)}m exceeds 15m threshold`);
+            resolve(null);
+            return;
+          }
+          resolve({lat, long});
         },
         error => {
           console.log(
@@ -279,28 +341,6 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
     };
   }, [isCheckedIn, staffProfile?.staff_id]);
 
-  const summaryItems = [
-    {
-      icon: 'ClipboardList',
-      label: 'Highest priority task due',
-      title: 'Land Verification',
-      detail: 'FM-10024 • Bori, Durg',
-      meta: 'Due today, 05:00 PM',
-      color: ORANGE,
-      bg: ORANGE_SOFT,
-      route: 'Tasks',
-    },
-    {
-      icon: 'MapPinned',
-      label: 'Next field visit',
-      title: 'Mahesh Sahu Farm',
-      detail: 'Insecticide Spray • FM-10035',
-      meta: 'Bori field shed, 07:00 PM',
-      color: BLUE,
-      bg: BLUE_SOFT,
-      route: 'Lands',
-    },
-  ];
 
   if (vehicleLogOpen) {
     return (
@@ -351,7 +391,15 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
           styles.content,
           {paddingTop: insets.top + 18, paddingBottom: insets.bottom + 104},
         ]}
-        showsVerticalScrollIndicator={false}>
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={GREEN}
+            colors={[GREEN]}
+          />
+        }>
         <View style={styles.header}>
           <Image source={AVATAR} style={styles.avatar} />
           <View style={styles.headerCopy}>
@@ -472,95 +520,70 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
           </TouchableOpacity>
         </View>
 
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>{t('todaysSummary')}</Text>
-          <TouchableOpacity
-            style={styles.viewAll}
-            activeOpacity={0.7}
-            onPress={() => navigateTo('Tasks')}>
-            <Text style={styles.viewAllText}>{t('viewAll')}</Text>
-            <Icon name="ChevronRight" size={18} color={GREEN} />
+        {/* Issued Items */}
+        <View style={styles.issuedHeader}>
+          <View>
+            <Text style={styles.issuedTitle}>Issued Items</Text>
+            <Text style={styles.issuedSubtitle}>{issuedItems.length} items currently issued</Text>
+          </View>
+          <TouchableOpacity activeOpacity={0.82} onPress={() => setIssueModalOpen(true)} style={styles.issueItemButton}>
+            <Icon name="Plus" size={16} color="#FFFFFF" />
+            <Text style={styles.issueItemButtonText}>Issue Item</Text>
           </TouchableOpacity>
         </View>
 
-        <View style={styles.summaryCard}>
-          {summaryItems.map((item, index) => (
-            <TouchableOpacity
-              key={item.label}
-              activeOpacity={0.7}
-              onPress={() => navigateTo(item.route)}
-              style={[
-                styles.summaryRow,
-                index < summaryItems.length - 1 && styles.summaryBorder,
-              ]}>
-              <View style={[styles.summaryIconWrap, {backgroundColor: item.bg}]}>
-                <Icon name={item.icon} size={22} color={item.color} />
+        <View style={styles.issuedTable}>
+          {/* Column headers */}
+          <View style={styles.issuedTableHead}>
+            <View style={styles.issuedColImage} />
+            <Text style={[styles.issuedHeadCell, styles.issuedColName]}>Item</Text>
+            <Text style={[styles.issuedHeadCell, styles.issuedColTimeline]}>Timeline</Text>
+            <Text style={[styles.issuedHeadCell, styles.issuedColTask]}>Qty</Text>
+          </View>
+
+          {issuedLoading ? (
+            <View style={styles.issuedEmptyBox}>
+              <Text style={styles.issuedEmptyText}>Loading issued items...</Text>
+            </View>
+          ) : issuedItems.length === 0 ? (
+            <View style={styles.issuedEmptyBox}>
+              <Icon name="PackageOpen" size={28} color={MUTED} />
+              <Text style={styles.issuedEmptyText}>No items currently issued</Text>
+            </View>
+          ) : issuedItems.map((item, index) => {
+            const {daysUsed, totalDays} = computeIssuedDays(item.issue_start_date, item.issue_end_date);
+            const progress = totalDays > 0 ? daysUsed / totalDays : 0;
+            const barColor = progress >= 0.8 ? '#E60000' : progress >= 0.5 ? ORANGE : GREEN;
+            const palette = ITEM_COLORS[index % ITEM_COLORS.length];
+            const isLast = index === issuedItems.length - 1;
+            return (
+              <View key={item.issue_id} style={[styles.issuedRow, !isLast && styles.issuedRowBorder]}>
+                {/* Icon */}
+                <View style={[styles.issuedColImage, styles.issuedImageBox, {backgroundColor: palette.bg}]}>
+                  <Icon name="Package" size={20} color={palette.color} />
+                </View>
+                {/* Name */}
+                <View style={styles.issuedColName}>
+                  <Text style={styles.issuedItemName} numberOfLines={1}>{item.item_name}</Text>
+                  <Text style={styles.issuedItemCategory}>{item.status}</Text>
+                </View>
+                {/* Timeline */}
+                <View style={styles.issuedColTimeline}>
+                  <View style={styles.issuedProgressTrack}>
+                    <View style={[styles.issuedProgressFill, {width: `${Math.min(progress * 100, 100)}%` as any, backgroundColor: barColor}]} />
+                  </View>
+                  <Text style={[styles.issuedProgressLabel, {color: barColor}]}>
+                    {daysUsed}d / {totalDays}d
+                  </Text>
+                </View>
+                {/* Quantity */}
+                <View style={styles.issuedColTask}>
+                  <Text style={styles.issuedItemName}>{item.quantity}</Text>
+                  <Text style={styles.issuedItemCategory}>units</Text>
+                </View>
               </View>
-              <View style={styles.summaryCopy}>
-                <Text style={styles.summaryLabel}>{item.label}</Text>
-                <Text style={styles.summaryTitle}>{item.title}</Text>
-                <Text style={styles.summaryDetail}>{item.detail}</Text>
-              </View>
-              <View style={styles.summaryMetaPill}>
-                <Text style={[styles.summaryMetaText, {color: item.color}]}>
-                  {item.meta}
-                </Text>
-              </View>
-              <Icon name="ChevronRight" size={21} color={MUTED} />
-            </TouchableOpacity>
-          ))}
-        </View>
-
-        <Text style={styles.quickTitle}>{t('quickActions')}</Text>
-        <View style={styles.quickGrid}>
-          <TouchableOpacity
-            activeOpacity={0.78}
-            onPress={() => setVehicleLogOpen(true)}
-            style={[styles.quickCard, styles.quickAttendance]}>
-            <View style={styles.quickIconGreen}>
-              <Icon name="Truck" size={26} color={GREEN} />
-            </View>
-            <View style={styles.quickCopy}>
-              <Text style={styles.quickCardTitle} numberOfLines={1}>{t('vehicleLogBook')}</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            activeOpacity={0.78}
-            onPress={() => setReimbursementOpen(true)}
-            style={[styles.quickCard, styles.quickBill]}>
-            <View style={styles.quickIconPurple}>
-              <Icon name="ReceiptIndianRupee" size={23} color="#FFFFFF" />
-            </View>
-            <View style={styles.quickCopy}>
-              <Text style={styles.quickCardTitle} numberOfLines={1}>{t('uploadBill')}</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            activeOpacity={0.78}
-            onPress={() => setTicketOpen(true)}
-            style={[styles.quickCard, styles.quickTicket]}>
-            <View style={styles.quickIconBlue}>
-              <Icon name="Ticket" size={24} color={BLUE} />
-            </View>
-            <View style={styles.quickCopy}>
-              <Text style={styles.quickCardTitle} numberOfLines={1}>{t('raiseTicket')}</Text>
-            </View>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            activeOpacity={0.78}
-            onPress={() => setLeaveOpen(true)}
-            style={[styles.quickCard, styles.quickLeave]}>
-            <View style={styles.quickIconOrange}>
-              <Icon name="CalendarPlus" size={24} color={ORANGE} />
-            </View>
-            <View style={styles.quickCopy}>
-              <Text style={styles.quickCardTitle} numberOfLines={1}>{t('applyLeave')}</Text>
-            </View>
-          </TouchableOpacity>
-
+            );
+          })}
         </View>
       </ScrollView>
 
@@ -661,7 +684,627 @@ export default function HomeScreen({staffProfile}: {staffProfile: StaffProfile |
           </View>
         </View>
       </Modal>
+
+      <IssueItemModal
+        visible={issueModalOpen}
+        staffId={staffProfile?.staff_id ?? ''}
+        onClose={() => setIssueModalOpen(false)}
+        onSubmit={() => {
+          setIssueModalOpen(false);
+          showToast();
+          if (staffProfile?.staff_id) { fetchIssuedItems(staffProfile.staff_id); }
+        }}
+      />
+
+      {toastVisible ? (
+        <Animated.View
+          style={[
+            styles.toast,
+            {
+              opacity: toastAnim,
+              transform: [{translateY: toastAnim.interpolate({inputRange: [0, 1], outputRange: [20, 0]})}],
+            },
+          ]}>
+          <Icon name="CheckCircle2" size={18} color="#FFFFFF" />
+          <Text style={styles.toastText}>On approval, issued item will be shown on homescreen</Text>
+        </Animated.View>
+      ) : null}
     </View>
+  );
+}
+
+type ApiIssuedItem = {
+  issue_id: string;
+  item_id: string;
+  item_name: string;
+  quantity: number;
+  issue_start_date: string;
+  issue_end_date: string;
+  status: string;
+  created_at: string;
+};
+
+const ITEM_COLORS = [
+  {color: BLUE, bg: '#EAF2FF'},
+  {color: ORANGE, bg: '#FFF4E9'},
+  {color: GREEN, bg: '#EFFAF2'},
+  {color: '#8B35E8', bg: '#F3E9FF'},
+  {color: '#E60000', bg: '#FFF0F0'},
+];
+
+function computeIssuedDays(start: string, end: string) {
+  const startMs = new Date(start).setHours(0, 0, 0, 0);
+  const endMs = new Date(end).setHours(0, 0, 0, 0);
+  const todayMs = new Date().setHours(0, 0, 0, 0);
+  const totalDays = Math.max(1, Math.round((endMs - startMs) / 86400000));
+  const daysUsed = Math.min(totalDays, Math.max(0, Math.round((todayMs - startMs) / 86400000)));
+  return {daysUsed, totalDays};
+}
+
+const ISSUED_ITEMS = [
+  {
+    id: '1',
+    name: 'Sprayer Pump',
+    category: 'Equipment',
+    icon: 'Droplets',
+    color: BLUE,
+    bg: '#EAF2FF',
+    daysUsed: 3,
+    totalDays: 7,
+    task: 'Insecticide Spray',
+    quantity: 2,
+    issuedOn: '28 May',
+    dueOn: '4 Jun',
+  },
+  {
+    id: '2',
+    name: 'Tractor Unit',
+    category: 'Vehicle',
+    icon: 'Tractor',
+    color: ORANGE,
+    bg: '#FFF4E9',
+    daysUsed: 5,
+    totalDays: 7,
+    task: 'Land Preparation',
+    quantity: 1,
+    issuedOn: '26 May',
+    dueOn: '2 Jun',
+  },
+  {
+    id: '3',
+    name: 'Drip Pipes (Set)',
+    category: 'Irrigation',
+    icon: 'Waves',
+    color: GREEN,
+    bg: '#EFFAF2',
+    daysUsed: 1,
+    totalDays: 10,
+    task: 'Drip System Setup',
+    quantity: 10,
+    issuedOn: '30 May',
+    dueOn: '9 Jun',
+  },
+  {
+    id: '4',
+    name: 'Seed Drill',
+    category: 'Equipment',
+    icon: 'Sprout',
+    color: '#8B35E8',
+    bg: '#F3E9FF',
+    daysUsed: 6,
+    totalDays: 7,
+    task: 'Wheat Sowing - FM-10040',
+    quantity: 1,
+    issuedOn: '25 May',
+    dueOn: '1 Jun',
+  },
+  {
+    id: '5',
+    name: 'Pump Set',
+    category: 'Equipment',
+    icon: 'Gauge',
+    color: '#E60000',
+    bg: '#FFF0F0',
+    daysUsed: 8,
+    totalDays: 8,
+    task: 'Irrigation Run',
+    quantity: 3,
+    issuedOn: '23 May',
+    dueOn: '31 May',
+  },
+];
+
+const PENDING_ISSUE_TASKS = [
+  {id: 'T001', label: 'Land Verification', detail: 'FM-10024 • Bori, Durg'},
+  {id: 'T002', label: 'Insecticide Spray', detail: 'FM-10035 • Bhilai, Durg'},
+  {id: 'T003', label: 'Soil Testing', detail: 'FM-10028 • Jamgaon, Durg'},
+  {id: 'T004', label: 'Irrigation Check', detail: 'FM-10040 • Koni, Durg'},
+  {id: 'T005', label: 'Crop Monitoring', detail: 'FM-10045 • Bhilai, Durg'},
+];
+
+type InventoryItem = {
+  Invent_id: string;
+  item_name: string;
+  new_item_code: string;
+  category: string;
+  unit: string;
+  stock: number;
+  item_image_url: string;
+  location: string;
+};
+
+function parseDateToISO(ddmmyyyy: string): string {
+  const parts = ddmmyyyy.trim().split('/');
+  if (parts.length !== 3) { return ddmmyyyy; }
+  const [dd, mm, yyyy] = parts;
+  return `${yyyy}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`;
+}
+
+function formatDateISO(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+const DP_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function formatDateDisplay(d: Date): string {
+  return `${String(d.getDate()).padStart(2, '0')} ${DP_MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+const DP_WEEK_DAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+function DatePickerModal({
+  visible,
+  value,
+  minDate,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean;
+  value: Date | null;
+  minDate: Date;
+  onClose: () => void;
+  onSelect: (d: Date) => void;
+}) {
+  const today = new Date(minDate);
+  today.setHours(0, 0, 0, 0);
+
+  const [viewYear, setViewYear] = useState(() => (value ?? today).getFullYear());
+  const [viewMonth, setViewMonth] = useState(() => (value ?? today).getMonth());
+  const [pending, setPending] = useState<Date | null>(value);
+
+  useEffect(() => {
+    if (visible) {
+      const d = value ?? today;
+      setViewYear(d.getFullYear());
+      setViewMonth(d.getMonth());
+      setPending(value);
+    }
+  }, [visible]);
+
+  const firstDayOfWeek = new Date(viewYear, viewMonth, 1).getDay();
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const cells: (number | null)[] = [
+    ...Array(firstDayOfWeek).fill(null),
+    ...Array.from({length: daysInMonth}, (_, i) => i + 1),
+  ];
+  const weeks: (number | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    const slice = cells.slice(i, i + 7);
+    while (slice.length < 7) { slice.push(null); }
+    weeks.push(slice);
+  }
+
+  const prevMonth = () => {
+    if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
+    else { setViewMonth(m => m - 1); }
+  };
+  const nextMonth = () => {
+    if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); }
+    else { setViewMonth(m => m + 1); }
+  };
+
+  const isBefore = (day: number) => {
+    const d = new Date(viewYear, viewMonth, day);
+    d.setHours(0, 0, 0, 0);
+    return d < today;
+  };
+  const isSelected = (day: number) =>
+    pending !== null &&
+    pending.getFullYear() === viewYear &&
+    pending.getMonth() === viewMonth &&
+    pending.getDate() === day;
+  const isToday = (day: number) => {
+    const t = new Date();
+    return t.getFullYear() === viewYear && t.getMonth() === viewMonth && t.getDate() === day;
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.dpOverlay}>
+        <TouchableOpacity activeOpacity={1} style={styles.dpBackdrop} onPress={onClose} />
+        <View style={styles.dpSheet}>
+          <View style={styles.dpHandle} />
+          <View style={styles.dpHeader}>
+            <TouchableOpacity onPress={prevMonth} style={styles.dpNavBtn}>
+              <Icon name="ChevronLeft" size={22} color={INK} />
+            </TouchableOpacity>
+            <Text style={styles.dpMonthYear}>{DP_MONTHS[viewMonth]} {viewYear}</Text>
+            <TouchableOpacity onPress={nextMonth} style={styles.dpNavBtn}>
+              <Icon name="ChevronRight" size={22} color={INK} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.dpDayRow}>
+            {DP_WEEK_DAYS.map((d, i) => (
+              <Text key={i} style={styles.dpDayLabel}>{d}</Text>
+            ))}
+          </View>
+          <View style={styles.dpGrid}>
+            {weeks.map((week, wi) => (
+              <View key={wi} style={styles.dpWeekRow}>
+                {week.map((day, di) => {
+                  if (!day) { return <View key={di} style={styles.dpCell} />; }
+                  const disabled = isBefore(day);
+                  const sel = isSelected(day);
+                  const tod = isToday(day);
+                  return (
+                    <TouchableOpacity
+                      key={di}
+                      disabled={disabled}
+                      activeOpacity={0.78}
+                      onPress={() => setPending(new Date(viewYear, viewMonth, day))}
+                      style={styles.dpCell}>
+                      <View style={[
+                        styles.dpDayCircle,
+                        sel && styles.dpDaySelected,
+                        !sel && tod && styles.dpDayToday,
+                      ]}>
+                        <Text style={[
+                          styles.dpDayText,
+                          sel && styles.dpDayTextSelected,
+                          !sel && tod && styles.dpDayTextToday,
+                          disabled && styles.dpDayTextDisabled,
+                        ]}>{day}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ))}
+          </View>
+          <View style={styles.dpActions}>
+            <TouchableOpacity onPress={onClose} style={styles.dpCancelBtn}>
+              <Text style={styles.dpCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => { if (pending) { onSelect(pending); onClose(); } }}
+              disabled={!pending}
+              style={[styles.dpConfirmBtn, !pending && {opacity: 0.5}]}>
+              <Text style={styles.dpConfirmText}>Confirm</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function IssueItemModal({
+  visible,
+  staffId,
+  onClose,
+  onSubmit,
+}: {
+  visible: boolean;
+  staffId: string;
+  onClose: () => void;
+  onSubmit: () => void;
+}) {
+  const [itemSearch, setItemSearch] = useState('');
+  const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
+  const [itemDropOpen, setItemDropOpen] = useState(false);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [loadingItems, setLoadingItems] = useState(false);
+  const [fromDateObj, setFromDateObj] = useState<Date | null>(null);
+  const [toDateObj, setToDateObj] = useState<Date | null>(null);
+  const [fromPickerOpen, setFromPickerOpen] = useState(false);
+  const [toPickerOpen, setToPickerOpen] = useState(false);
+  const [quantity, setQuantity] = useState('');
+  const [selectedTask, setSelectedTask] = useState<typeof PENDING_ISSUE_TASKS[number] | null>(null);
+  const [taskDropOpen, setTaskDropOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!visible) { return; }
+    const fetchItems = async () => {
+      try {
+        setLoadingItems(true);
+        const res = await fetch(`${API_BASE_URL}/inventory/get_all_item`);
+        const data = await res.json();
+        if (res.ok && Array.isArray(data?.items)) {
+          setInventoryItems(data.items as InventoryItem[]);
+        }
+      } catch {
+        // keep empty list
+      } finally {
+        setLoadingItems(false);
+      }
+    };
+    fetchItems();
+  }, [visible]);
+
+  const filteredItems = itemSearch.trim()
+    ? inventoryItems.filter(i =>
+        i.item_name.toLowerCase().includes(itemSearch.toLowerCase()) ||
+        i.category.toLowerCase().includes(itemSearch.toLowerCase()) ||
+        i.new_item_code.toLowerCase().includes(itemSearch.toLowerCase()),
+      )
+    : inventoryItems;
+
+  const reset = () => {
+    setItemSearch('');
+    setSelectedItem(null);
+    setItemDropOpen(false);
+    setFromDateObj(null);
+    setToDateObj(null);
+    setFromPickerOpen(false);
+    setToPickerOpen(false);
+    setQuantity('');
+    setSelectedTask(null);
+    setTaskDropOpen(false);
+    setSubmitting(false);
+  };
+
+  const handleSubmit = async () => {
+    if (!selectedItem) {
+      Alert.alert('Required', 'Please select an item.');
+      return;
+    }
+    if (!fromDateObj || !toDateObj) {
+      Alert.alert('Required', 'Please select the issue timeline.');
+      return;
+    }
+    if (toDateObj < fromDateObj) {
+      Alert.alert('Invalid', 'End date cannot be before start date.');
+      return;
+    }
+    if (!quantity.trim() || isNaN(Number(quantity))) {
+      Alert.alert('Required', 'Please enter a valid quantity.');
+      return;
+    }
+    if (!selectedTask) {
+      Alert.alert('Required', 'Please select a task.');
+      return;
+    }
+    try {
+      setSubmitting(true);
+      const res = await fetch(`${API_BASE_URL}/inventory/make_issue_request`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          item_id: selectedItem.Invent_id,
+          quantity: Number(quantity),
+          issue_start_date: formatDateISO(fromDateObj),
+          issue_end_date: formatDateISO(toDateObj),
+          staff_id: staffId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        Alert.alert('Error', 'Failed to raise request. Please try again.');
+        return;
+      }
+      reset();
+      onSubmit();
+    } catch {
+      Alert.alert('Error', 'Network error. Please try again.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={() => { reset(); onClose(); }}>
+      <View style={styles.issueOverlay}>
+        <TouchableOpacity activeOpacity={1} style={styles.issueBackdrop} onPress={() => { reset(); onClose(); }} />
+        <View style={styles.issueSheet}>
+          <View style={styles.issueHandle} />
+
+          <View style={styles.issueSheetHeader}>
+            <View style={styles.issueSheetIconWrap}>
+              <Icon name="PackagePlus" size={22} color={GREEN} />
+            </View>
+            <View style={{flex: 1}}>
+              <Text style={styles.issueSheetTitle}>Issue Item Request</Text>
+              <Text style={styles.issueSheetSubtitle}>Fill details to raise a request</Text>
+            </View>
+            <TouchableOpacity activeOpacity={0.75} onPress={() => { reset(); onClose(); }} style={styles.issueSheetClose}>
+              <Icon name="X" size={20} color={INK} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.issueForm} keyboardShouldPersistTaps="handled">
+
+            {/* Item Search + Dropdown */}
+            <Text style={styles.issueFieldLabel}>Item *</Text>
+
+            {selectedItem ? (
+              <TouchableOpacity
+                activeOpacity={0.78}
+                onPress={() => { setSelectedItem(null); setItemSearch(''); setItemDropOpen(true); }}
+                style={styles.selectedItemRow}>
+                <Image
+                  source={{uri: selectedItem.item_image_url}}
+                  style={styles.selectedItemImage}
+                  resizeMode="cover"
+                />
+                <View style={{flex: 1}}>
+                  <Text style={styles.selectedItemName} numberOfLines={1}>{selectedItem.item_name}</Text>
+                  <Text style={styles.selectedItemMeta}>{selectedItem.new_item_code} • {selectedItem.category}</Text>
+                </View>
+                <View style={[styles.stockBadge, {backgroundColor: selectedItem.stock > 0 ? '#EFFAF2' : '#FFF0F0'}]}>
+                  <Text style={[styles.stockBadgeText, {color: selectedItem.stock > 0 ? GREEN : '#E60000'}]}>
+                    {selectedItem.stock} {selectedItem.unit}
+                  </Text>
+                </View>
+                <Icon name="X" size={14} color={MUTED} />
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.issueInputWrap}>
+                <Icon name="Search" size={16} color={GREEN} />
+                <TextInput
+                  value={itemSearch}
+                  onChangeText={text => { setItemSearch(text); setItemDropOpen(true); }}
+                  onFocus={() => setItemDropOpen(true)}
+                  placeholder="Search item by name or category..."
+                  placeholderTextColor="#94A3B8"
+                  style={styles.issueInput}
+                />
+                {itemSearch.length > 0 ? (
+                  <TouchableOpacity onPress={() => { setItemSearch(''); }} activeOpacity={0.7}>
+                    <Icon name="X" size={15} color={MUTED} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            )}
+
+            {itemDropOpen && !selectedItem ? (
+              <View style={styles.issueDropdown}>
+                {loadingItems ? (
+                  <View style={styles.issueDropdownLoading}>
+                    <Text style={styles.issueDropdownLoadingText}>Loading items...</Text>
+                  </View>
+                ) : filteredItems.length === 0 ? (
+                  <View style={styles.issueDropdownLoading}>
+                    <Text style={styles.issueDropdownLoadingText}>No items found</Text>
+                  </View>
+                ) : filteredItems.map((item, index) => (
+                  <TouchableOpacity
+                    key={item.Invent_id}
+                    activeOpacity={0.78}
+                    onPress={() => { setSelectedItem(item); setItemDropOpen(false); setItemSearch(''); }}
+                    style={[styles.issueItemRow, index === filteredItems.length - 1 && {borderBottomWidth: 0}]}>
+                    <Image
+                      source={{uri: item.item_image_url}}
+                      style={styles.itemThumb}
+                      resizeMode="cover"
+                    />
+                    <View style={{flex: 1}}>
+                      <Text style={styles.issueDropdownLabel} numberOfLines={1}>{item.item_name}</Text>
+                      <Text style={styles.issueDropdownDetail}>{item.new_item_code} • {item.category}</Text>
+                    </View>
+                    <View style={[styles.stockBadge, {backgroundColor: item.stock > 0 ? '#EFFAF2' : '#FFF0F0'}]}>
+                      <Text style={[styles.stockBadgeText, {color: item.stock > 0 ? GREEN : '#E60000'}]}>
+                        {item.stock > 0 ? `${item.stock} ${item.unit}` : 'Out of stock'}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+
+            {/* Issue Timeline */}
+            <Text style={styles.issueFieldLabel}>Issue Timeline *</Text>
+            <View style={styles.issueTwoCol}>
+              <TouchableOpacity
+                activeOpacity={0.78}
+                onPress={() => setFromPickerOpen(true)}
+                style={[styles.issueInputWrap, {flex: 1, marginRight: 8}]}>
+                <Icon name="CalendarDays" size={16} color={GREEN} />
+                <Text style={[styles.issueInput, !fromDateObj && {color: '#94A3B8'}]}>
+                  {fromDateObj ? formatDateDisplay(fromDateObj) : 'From date'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.78}
+                onPress={() => setToPickerOpen(true)}
+                style={[styles.issueInputWrap, {flex: 1}]}>
+                <Icon name="CalendarDays" size={16} color={ORANGE} />
+                <Text style={[styles.issueInput, !toDateObj && {color: '#94A3B8'}]}>
+                  {toDateObj ? formatDateDisplay(toDateObj) : 'To date'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <DatePickerModal
+              visible={fromPickerOpen}
+              value={fromDateObj}
+              minDate={new Date()}
+              onClose={() => setFromPickerOpen(false)}
+              onSelect={(d: Date) => { setFromDateObj(d); if (toDateObj && toDateObj < d) { setToDateObj(null); } }}
+            />
+            <DatePickerModal
+              visible={toPickerOpen}
+              value={toDateObj}
+              minDate={fromDateObj ?? new Date()}
+              onClose={() => setToPickerOpen(false)}
+              onSelect={(d: Date) => setToDateObj(d)}
+            />
+
+            {/* Quantity */}
+            <Text style={styles.issueFieldLabel}>Quantity *</Text>
+            <View style={styles.issueInputWrap}>
+              <Icon name="Hash" size={16} color={GREEN} />
+              <TextInput
+                value={quantity}
+                onChangeText={setQuantity}
+                placeholder="Enter quantity"
+                placeholderTextColor="#94A3B8"
+                keyboardType="numeric"
+                style={styles.issueInput}
+              />
+              {selectedItem ? <Text style={styles.unitLabel}>{selectedItem.unit}</Text> : null}
+            </View>
+
+            {/* Task */}
+            <Text style={styles.issueFieldLabel}>Task *</Text>
+            <TouchableOpacity
+              activeOpacity={0.78}
+              onPress={() => setTaskDropOpen(o => !o)}
+              style={styles.issueInputWrap}>
+              <Icon name="ClipboardList" size={16} color={GREEN} />
+              <Text style={[styles.issueInput, !selectedTask && {color: '#94A3B8'}]} numberOfLines={1}>
+                {selectedTask ? selectedTask.label : 'Select pending task'}
+              </Text>
+              <Icon name={taskDropOpen ? 'ChevronUp' : 'ChevronDown'} size={16} color={MUTED} />
+            </TouchableOpacity>
+            {taskDropOpen ? (
+              <View style={styles.issueDropdown}>
+                {PENDING_ISSUE_TASKS.map((task, index) => (
+                  <TouchableOpacity
+                    key={task.id}
+                    activeOpacity={0.78}
+                    onPress={() => { setSelectedTask(task); setTaskDropOpen(false); }}
+                    style={[styles.issueDropdownItem, index === PENDING_ISSUE_TASKS.length - 1 && {borderBottomWidth: 0}]}>
+                    <View style={{flex: 1}}>
+                      <Text style={styles.issueDropdownLabel}>{task.label}</Text>
+                      <Text style={styles.issueDropdownDetail}>{task.detail}</Text>
+                    </View>
+                    {selectedTask?.id === task.id ? <Icon name="Check" size={15} color={GREEN} /> : null}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null}
+
+          </ScrollView>
+
+          <View style={styles.issueActions}>
+            <TouchableOpacity activeOpacity={0.76} onPress={() => { reset(); onClose(); }} style={styles.issueCancelBtn}>
+              <Text style={styles.issueCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={handleSubmit}
+              disabled={submitting}
+              style={[styles.issueMakeBtn, submitting && {opacity: 0.6}]}>
+              <Icon name="SendHorizonal" size={16} color="#FFFFFF" />
+              <Text style={styles.issueMakeBtnText}>{submitting ? 'Submitting...' : 'Make Request'}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -3365,6 +4008,382 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginBottom: 4,
   },
+  issuedHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+    marginTop: 4,
+  },
+  issuedTitle: {
+    color: INK,
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 20,
+  },
+  issuedSubtitle: {
+    color: MUTED,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  issueItemButton: {
+    alignItems: 'center',
+    backgroundColor: GREEN,
+    borderRadius: 8,
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  issueItemButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  issuedTable: {
+    backgroundColor: '#FFFFFF',
+    borderColor: CARD_BORDER,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 24,
+    overflow: 'hidden',
+  },
+  issuedTableHead: {
+    alignItems: 'center',
+    backgroundColor: '#F5F8FA',
+    borderBottomColor: CARD_BORDER,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  issuedHeadCell: {
+    color: MUTED,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  issuedRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  issuedRowBorder: {
+    borderBottomColor: CARD_BORDER,
+    borderBottomWidth: 1,
+  },
+  issuedColImage: {
+    width: 40,
+    marginRight: 10,
+  },
+  issuedImageBox: {
+    alignItems: 'center',
+    borderRadius: 10,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  issuedColName: {
+    flex: 2.2,
+    minWidth: 0,
+    paddingRight: 6,
+  },
+  issuedItemName: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 17,
+  },
+  issuedItemCategory: {
+    color: MUTED,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  issuedColTimeline: {
+    flex: 2,
+    paddingRight: 8,
+  },
+  issuedProgressTrack: {
+    backgroundColor: '#EEF1F5',
+    borderRadius: 4,
+    height: 6,
+    overflow: 'hidden',
+    width: '100%',
+  },
+  issuedProgressFill: {
+    borderRadius: 4,
+    height: 6,
+  },
+  issuedProgressLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  issuedColTask: {
+    flex: 2,
+    minWidth: 0,
+  },
+  issuedEmptyBox: {
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 24,
+  },
+  issuedEmptyText: {
+    color: MUTED,
+    fontSize: 13,
+  },
+  issuedTaskName: {
+    color: MUTED,
+    fontSize: 11,
+    fontWeight: '500',
+    lineHeight: 15,
+  },
+  toast: {
+    alignItems: 'center',
+    backgroundColor: '#1A7A3C',
+    borderRadius: 12,
+    bottom: 36,
+    flexDirection: 'row',
+    gap: 10,
+    left: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    position: 'absolute',
+    right: 16,
+    shadowColor: '#000',
+    shadowOffset: {width: 0, height: 4},
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  toastText: {
+    color: '#FFFFFF',
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  issueOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  issueBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  issueSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    maxHeight: '88%',
+    paddingBottom: 12,
+  },
+  issueHandle: {
+    alignSelf: 'center',
+    backgroundColor: '#DDE3EC',
+    borderRadius: 3,
+    height: 4,
+    marginTop: 10,
+    marginBottom: 4,
+    width: 40,
+  },
+  issueSheetHeader: {
+    alignItems: 'center',
+    borderBottomColor: '#EEF1F5',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+  },
+  issueSheetIconWrap: {
+    alignItems: 'center',
+    backgroundColor: '#EFFAF2',
+    borderRadius: 12,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  issueSheetTitle: {
+    color: INK,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  issueSheetSubtitle: {
+    color: MUTED,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  issueSheetClose: {
+    alignItems: 'center',
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  issueForm: {
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  issueFieldLabel: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 6,
+    marginTop: 14,
+  },
+  issueInputWrap: {
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderColor: '#DDE3EC',
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  issueInput: {
+    color: INK,
+    flex: 1,
+    fontSize: 14,
+    padding: 0,
+  },
+  issueTwoCol: {
+    flexDirection: 'row',
+  },
+  issueDropdown: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DDE3EC',
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 4,
+    overflow: 'hidden',
+  },
+  issueDropdownItem: {
+    alignItems: 'center',
+    borderBottomColor: '#EEF1F5',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  issueDropdownLabel: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  issueDropdownDetail: {
+    color: MUTED,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  issueActions: {
+    borderTopColor: '#EEF1F5',
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 8,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 8,
+  },
+  issueCancelBtn: {
+    alignItems: 'center',
+    borderColor: '#DDE3EC',
+    borderRadius: 10,
+    borderWidth: 1,
+    flex: 1,
+    paddingVertical: 13,
+  },
+  issueCancelText: {
+    color: MUTED,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  issueMakeBtn: {
+    alignItems: 'center',
+    backgroundColor: GREEN,
+    borderRadius: 10,
+    flex: 2,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    paddingVertical: 13,
+  },
+  issueMakeBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  selectedItemRow: {
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderColor: GREEN,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  selectedItemImage: {
+    borderRadius: 8,
+    height: 42,
+    width: 42,
+    backgroundColor: '#EEF1F5',
+  },
+  selectedItemName: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  selectedItemMeta: {
+    color: MUTED,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  stockBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  stockBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  issueItemRow: {
+    alignItems: 'center',
+    borderBottomColor: '#EEF1F5',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  itemThumb: {
+    backgroundColor: '#EEF1F5',
+    borderRadius: 8,
+    height: 44,
+    width: 44,
+  },
+  issueDropdownLoading: {
+    alignItems: 'center',
+    paddingVertical: 16,
+  },
+  issueDropdownLoadingText: {
+    color: MUTED,
+    fontSize: 13,
+  },
+  unitLabel: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 4,
+  },
   vehicleRoot: {
     backgroundColor: '#FFFFFF',
     flex: 1,
@@ -4805,5 +5824,135 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
     lineHeight: 21,
+  },
+  dpOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  dpBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  dpSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingBottom: 24,
+  },
+  dpHandle: {
+    alignSelf: 'center',
+    backgroundColor: '#DDE3EC',
+    borderRadius: 3,
+    height: 4,
+    marginBottom: 8,
+    marginTop: 10,
+    width: 40,
+  },
+  dpHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  dpNavBtn: {
+    alignItems: 'center',
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  dpMonthYear: {
+    color: INK,
+    fontSize: 17,
+    fontWeight: '800',
+  },
+  dpDayRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 8,
+    paddingBottom: 6,
+  },
+  dpDayLabel: {
+    color: MUTED,
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  dpGrid: {
+    paddingHorizontal: 8,
+  },
+  dpWeekRow: {
+    flexDirection: 'row',
+    marginBottom: 4,
+  },
+  dpCell: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    paddingVertical: 2,
+  },
+  dpDayCircle: {
+    alignItems: 'center',
+    borderRadius: 20,
+    height: 38,
+    justifyContent: 'center',
+    width: 38,
+  },
+  dpDaySelected: {
+    backgroundColor: GREEN,
+  },
+  dpDayToday: {
+    borderColor: GREEN,
+    borderWidth: 1.5,
+  },
+  dpDayText: {
+    color: INK,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  dpDayTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+  },
+  dpDayTextToday: {
+    color: GREEN,
+    fontWeight: '800',
+  },
+  dpDayTextDisabled: {
+    color: '#C8D0DC',
+  },
+  dpActions: {
+    borderTopColor: '#EEF1F5',
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+  },
+  dpCancelBtn: {
+    alignItems: 'center',
+    borderColor: '#DDE3EC',
+    borderRadius: 10,
+    borderWidth: 1,
+    flex: 1,
+    paddingVertical: 13,
+  },
+  dpCancelText: {
+    color: MUTED,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  dpConfirmBtn: {
+    alignItems: 'center',
+    backgroundColor: GREEN,
+    borderRadius: 10,
+    flex: 2,
+    paddingVertical: 13,
+  },
+  dpConfirmText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
   },
 });

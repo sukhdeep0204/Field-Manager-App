@@ -5,6 +5,7 @@ import {
   Image,
   Linking,
   Modal,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -18,6 +19,7 @@ import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Icon from '../components/Icon';
 import {useLanguage} from '../context/LanguageContext';
 import {loadSession, type FarmDetail, type FarmerDetail} from '../auth/session';
+import {API_BASE_URL} from '../config';
 
 let LeafletWebView: any = null;
 try {
@@ -52,6 +54,9 @@ const LANDS = [
     irrigation: 'Canal + Borewell',
     coordinates: '21.1904, 81.2849',
     photos: ['North Boundary', 'Crop View', 'Water Source'],
+    fieldVisitDate: '2026-06-05',
+    fieldVisitActivity: 'Land Verification',
+    fieldVisitTime: '10:00 AM',
   },
   {
     id: 'FM-10028',
@@ -67,6 +72,9 @@ const LANDS = [
     irrigation: 'Borewell',
     coordinates: '21.2235, 81.3008',
     photos: ['Entry Point', 'Field Center', 'Boundary Stone'],
+    fieldVisitDate: '2026-05-30',
+    fieldVisitActivity: 'Farmer Meeting',
+    fieldVisitTime: '09:00 AM',
   },
   {
     id: 'FM-10035',
@@ -82,6 +90,9 @@ const LANDS = [
     irrigation: 'Rainfed',
     coordinates: '21.1938, 81.3509',
     photos: ['South Edge', 'Crop Closeup', 'Access Road'],
+    fieldVisitDate: '2026-06-10',
+    fieldVisitActivity: 'Insecticide Spray',
+    fieldVisitTime: '07:00 PM',
   },
   {
     id: 'FM-10040',
@@ -130,41 +141,6 @@ const LANDS = [
   },
 ];
 
-const UPCOMING_FIELD_VISITS = [
-  {
-    id: 'FV-2026-042',
-    landId: 'FM-10035',
-    location: 'Bori field shed, Durg',
-    farmerName: 'Mahesh Sahu',
-    activity: 'Insecticide Spray',
-    scheduledDate: 'Today',
-    scheduledTime: '07:00 PM',
-    color: ORANGE,
-    bg: ORANGE_SOFT,
-  },
-  {
-    id: 'FV-2026-043',
-    landId: 'FM-10024',
-    location: 'Bori, Durg',
-    farmerName: 'Ramesh Yadav',
-    activity: 'Land Verification',
-    scheduledDate: '26 May',
-    scheduledTime: '10:00 AM',
-    color: BLUE,
-    bg: BLUE_SOFT,
-  },
-  {
-    id: 'FV-2026-044',
-    landId: 'FM-10040',
-    location: 'Koni, Durg',
-    farmerName: 'Gopal Verma',
-    activity: 'Land Survey',
-    scheduledDate: '27 May',
-    scheduledTime: '09:00 AM',
-    color: GREEN,
-    bg: GREEN_SOFT,
-  },
-];
 
 const VISIT_ACTIVITY_TYPES = [
   'Routine Visit',
@@ -201,6 +177,9 @@ type Land = {
   landCoordinates?: number[][];
   landImageUrls?: string[];
   landVideoUrl?: string;
+  fieldVisitDate?: string;
+  fieldVisitActivity?: string;
+  fieldVisitTime?: string;
 };
 
 export default function HarvestScreen() {
@@ -208,20 +187,68 @@ export default function HarvestScreen() {
   const {language, t} = useLanguage();
   const [lands, setLands] = useState<Land[]>(LANDS);
   const [isLoadingLands, setIsLoadingLands] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [visitFilter, setVisitFilter] = useState<'all' | 'today' | 'upcoming' | 'overdue'>('all');
   const [selectedLand, setSelectedLand] = useState<Land | null>(null);
   const [fieldVisitModalOpen, setFieldVisitModalOpen] = useState(false);
 
-  useEffect(() => {
-    const hydrateLands = async () => {
-      const session = await loadSession();
-      const farmDetails = session?.farmDetails ?? [];
-      const farmerDetails = session?.farmerDetails ?? {};
+  const filteredLands = visitFilter === 'all'
+    ? lands
+    : lands.filter(land => {
+        const status = land.fieldVisitDate ? getVisitStatus(land.fieldVisitDate) : null;
+        return status === visitFilter;
+      });
 
-      if (farmDetails.length > 0) {
-        setLands(mapFarmDetailsToLands(farmDetails, farmerDetails));
+  const hydrateLands = async () => {
+    const session = await loadSession();
+    const farmDetails = session?.farmDetails ?? [];
+    const farmerDetails = session?.farmerDetails ?? {};
+    const farmIds: string[] = session?.farmAccess?.farm_ids ?? [];
+
+    let baseLands: Land[] = farmDetails.length > 0
+      ? mapFarmDetailsToLands(farmDetails, farmerDetails)
+      : LANDS;
+
+    if (farmIds.length > 0) {
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/admin_all_task/get_all_upcoming_field_visit_tasks`,
+          {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({farm_id: farmIds}),
+          },
+        );
+        const data = await res.json();
+        if (res.ok && Array.isArray(data)) {
+          const visitMap: Record<string, string> = {};
+          data.forEach((item: {feild_id: string[]; next_visit_date: string}) => {
+            const farmId = item.feild_id?.[0];
+            if (farmId && item.next_visit_date) {
+              visitMap[farmId] = item.next_visit_date;
+            }
+          });
+          baseLands = baseLands.map(land => ({
+            ...land,
+            fieldVisitDate: visitMap[land.id] ?? land.fieldVisitDate,
+          }));
+        }
+      } catch {
+        // keep existing fieldVisitDate
       }
-      setIsLoadingLands(false);
-    };
+    }
+
+    setLands(baseLands);
+    setIsLoadingLands(false);
+  };
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await hydrateLands();
+    setRefreshing(false);
+  };
+
+  useEffect(() => {
     hydrateLands();
   }, []);
 
@@ -234,7 +261,15 @@ export default function HarvestScreen() {
           styles.content,
           {paddingTop: insets.top + 6, paddingBottom: insets.bottom + 112},
         ]}
-        showsVerticalScrollIndicator={false}>
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={GREEN}
+            colors={[GREEN]}
+          />
+        }>
         <View style={styles.headerRow}>
           <View style={styles.headerCopy}>
             <Text style={styles.title}>{t('lands')}</Text>
@@ -262,45 +297,41 @@ export default function HarvestScreen() {
           <Icon name="ChevronRight" size={22} color={GREEN} />
         </TouchableOpacity>
 
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>{t('upcomingFieldVisits')}</Text>
-          <View style={styles.visitCountBadge}>
-            <Text style={styles.visitCountText}>{UPCOMING_FIELD_VISITS.length}</Text>
-          </View>
-        </View>
+        <Text style={[styles.sectionTitle, {marginTop: 24, marginBottom: 10}]}>
+          {`${t('assignedLands').split('(')[0].trim()} (${filteredLands.length})`}
+        </Text>
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.visitCardsRow}>
-          {UPCOMING_FIELD_VISITS.map(visit => (
+        {/* ── Visit filter chips ── */}
+        <View style={styles.filterChipsRow}>
+          {([
+            {key: 'all',      label: 'All'},
+            {key: 'today',    label: 'Today'},
+            {key: 'upcoming', label: 'Upcoming'},
+            {key: 'overdue',  label: 'Overdue'},
+          ] as const).map(({key, label}) => (
             <TouchableOpacity
-              key={visit.id}
-              activeOpacity={0.82}
-              style={[styles.visitCard, {backgroundColor: visit.bg, borderColor: visit.bg}]}>
-              <View style={styles.visitCardTop}>
-                <View style={[styles.visitActivityDot, {backgroundColor: visit.color}]} />
-                <Text style={[styles.visitActivity, {color: visit.color}]} numberOfLines={1}>
-                  {visit.activity}
-                </Text>
-              </View>
-              <Text style={styles.visitLandId}>{visit.landId}</Text>
-              <Text style={styles.visitFarmer} numberOfLines={1}>{visit.farmerName}</Text>
-              <View style={styles.visitTimeRow}>
-                <Icon name="MapPin" size={13} color={MUTED} />
-                <Text style={styles.visitLocation} numberOfLines={1}>{visit.location}</Text>
-              </View>
-              <View style={styles.visitTimeRow}>
-                <Icon name="Clock3" size={13} color={MUTED} />
-                <Text style={styles.visitTime}>{visit.scheduledDate}, {visit.scheduledTime}</Text>
-              </View>
+              key={key}
+              activeOpacity={0.78}
+              onPress={() => setVisitFilter(key)}
+              style={[
+                styles.filterChip,
+                visitFilter === key && styles.filterChipActive,
+                visitFilter === key && key === 'today'    && styles.filterChipToday,
+                visitFilter === key && key === 'overdue'  && styles.filterChipOverdue,
+                visitFilter === key && key === 'upcoming' && styles.filterChipUpcoming,
+              ]}>
+              <Text style={[
+                styles.filterChipText,
+                visitFilter === key && styles.filterChipTextActive,
+                visitFilter === key && key === 'today'    && {color: ORANGE},
+                visitFilter === key && key === 'overdue'  && {color: '#DC2626'},
+                visitFilter === key && key === 'upcoming' && {color: GREEN},
+              ]}>
+                {label}
+              </Text>
             </TouchableOpacity>
           ))}
-        </ScrollView>
-
-        <Text style={[styles.sectionTitle, {marginTop: 24}]}>
-          {`${t('assignedLands').split('(')[0].trim()} (${lands.length})`}
-        </Text>
+        </View>
 
         <View style={styles.list}>
           {isLoadingLands ? (
@@ -309,33 +340,98 @@ export default function HarvestScreen() {
               <Text style={styles.loadingText}>Loading lands...</Text>
             </View>
           ) : null}
-          {lands.map(land => (
-            <TouchableOpacity
-              key={land.id}
-              activeOpacity={0.82}
-              onPress={() => setSelectedLand(land)}
-              style={styles.card}>
-              <View style={styles.details}>
-                <Text style={styles.landId}>{land.farmerName}</Text>
-                <InfoRow label={t('location')} value={land.location} />
-                <InfoRow label="Farm ID" value={maskFarmId(land.id)} />
-                <InfoRow label={t('crop')} value={translateLandText(land.crop, language)} />
-                <InfoRow label={t('area')} value={`${land.area} ${t('acres')}`} />
-              </View>
+          {filteredLands.length === 0 && !isLoadingLands ? (
+            <View style={styles.emptyFilterBox}>
+              <Icon name="CalendarSearch" size={28} color={MUTED} />
+              <Text style={styles.emptyFilterText}>
+                No lands with {visitFilter} field visits
+              </Text>
+            </View>
+          ) : null}
+          {filteredLands.map(land => {
+            const visitStatus = land.fieldVisitDate
+              ? getVisitStatus(land.fieldVisitDate)
+              : null;
 
-              <View style={styles.verticalDivider} />
+            return (
+              <TouchableOpacity
+                key={land.id}
+                activeOpacity={0.82}
+                onPress={() => setSelectedLand(land)}
+                style={styles.card}>
 
-              <View style={styles.areaPane}>
-                <View style={styles.landIconWrap}>
-                  <Icon name="Sprout" size={26} color={GREEN} />
+                {/* ── Top row ── */}
+                <View style={styles.cardTopRow}>
+                  <View style={styles.details}>
+                    <Text style={styles.landId}>{land.farmerName}</Text>
+                    <InfoRow label={t('location')} value={land.location} />
+                    <InfoRow label="Farm ID" value={maskFarmId(land.id)} />
+                    <InfoRow label={t('crop')} value={translateLandText(land.crop, language)} />
+                    <InfoRow label={t('area')} value={`${land.area} ${t('acres')}`} />
+                  </View>
+
+                  <View style={styles.verticalDivider} />
+
+                  <View style={styles.areaPane}>
+                    <View style={styles.landIconWrap}>
+                      <Icon name="Sprout" size={26} color={GREEN} />
+                    </View>
+                    <Text style={styles.areaNumber}>{land.area}</Text>
+                    <Text style={styles.areaLabel}>{t('acres')}</Text>
+                  </View>
+
+                  <Icon name="ChevronRight" size={31} color={MUTED} style={styles.chevron} />
                 </View>
-                <Text style={styles.areaNumber}>{land.area}</Text>
-                <Text style={styles.areaLabel}>{t('acres')}</Text>
-              </View>
 
-              <Icon name="ChevronRight" size={31} color={MUTED} style={styles.chevron} />
-            </TouchableOpacity>
-          ))}
+                {/* ── Field visit banner ── */}
+                {visitStatus ? (
+                  <View style={[
+                    styles.visitBanner,
+                    visitStatus === 'today'    && styles.visitBannerToday,
+                    visitStatus === 'overdue'  && styles.visitBannerOverdue,
+                    visitStatus === 'upcoming' && styles.visitBannerUpcoming,
+                  ]}>
+                    <Icon
+                      name={
+                        visitStatus === 'today'    ? 'CalendarClock' :
+                        visitStatus === 'overdue'  ? 'AlertCircle'   :
+                                                     'CalendarDays'
+                      }
+                      size={13}
+                      color={
+                        visitStatus === 'today'    ? ORANGE    :
+                        visitStatus === 'overdue'  ? '#DC2626' :
+                                                     GREEN
+                      }
+                    />
+                    <Text style={[
+                      styles.visitBannerText,
+                      visitStatus === 'today'    && styles.visitBannerTextToday,
+                      visitStatus === 'overdue'  && styles.visitBannerTextOverdue,
+                      visitStatus === 'upcoming' && styles.visitBannerTextUpcoming,
+                    ]}>
+                      {visitStatus === 'today'
+                        ? `Field visit today · ${land.fieldVisitTime ?? ''}`
+                        : visitStatus === 'overdue'
+                        ? `Visit overdue · ${land.fieldVisitDate}`
+                        : `Next visit · ${land.fieldVisitDate}`}
+                    </Text>
+                    {land.fieldVisitActivity ? (
+                      <Text style={[
+                        styles.visitBannerActivity,
+                        visitStatus === 'today'    && {color: ORANGE},
+                        visitStatus === 'overdue'  && {color: '#DC2626'},
+                        visitStatus === 'upcoming' && {color: GREEN},
+                      ]}>
+                        {land.fieldVisitActivity}
+                      </Text>
+                    ) : null}
+                  </View>
+                ) : null}
+
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </ScrollView>
 
@@ -643,6 +739,39 @@ function parseCoordinateText(value: string) {
   }
 
   return {lat, lng};
+}
+
+const MONTH_MAP: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+function getVisitStatus(scheduledDate: string): 'today' | 'overdue' | 'upcoming' | null {
+  if (!scheduledDate || scheduledDate === '-') { return null; }
+  if (scheduledDate.toLowerCase() === 'today') { return 'today'; }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let visitDate: Date | null = null;
+
+  if (/^\d{4}-\d{2}-\d{2}/.test(scheduledDate)) {
+    visitDate = new Date(scheduledDate);
+  } else {
+    const parts = scheduledDate.trim().split(/\s+/);
+    const day = parseInt(parts[0], 10);
+    const month = MONTH_MAP[(parts[1] ?? '').toLowerCase().slice(0, 3)];
+    const year = parts[2] ? parseInt(parts[2], 10) : today.getFullYear();
+    if (!isNaN(day) && month !== undefined) {
+      visitDate = new Date(year, month, day);
+    }
+  }
+
+  if (!visitDate || isNaN(visitDate.getTime())) { return null; }
+  visitDate.setHours(0, 0, 0, 0);
+
+  if (visitDate.getTime() === today.getTime()) { return 'today'; }
+  return visitDate < today ? 'overdue' : 'upcoming';
 }
 
 function maskFarmId(farmId: string) {
@@ -1084,22 +1213,60 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   card: {
-    alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderColor: CARD_BORDER,
     borderRadius: 12,
     borderWidth: 1,
+    overflow: 'hidden',
+    shadowColor: '#18233A',
+    shadowOffset: {width: 0, height: 3},
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  cardTopRow: {
+    alignItems: 'center',
     flexDirection: 'row',
     minHeight: 106,
     paddingBottom: 10,
     paddingLeft: 13,
     paddingRight: 17,
     paddingTop: 10,
-    shadowColor: '#18233A',
-    shadowOffset: {width: 0, height: 3},
-    shadowOpacity: 0.06,
-    shadowRadius: 12,
-    elevation: 2,
+  },
+  visitBanner: {
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: CARD_BORDER,
+    flexDirection: 'row',
+    gap: 7,
+    paddingHorizontal: 13,
+    paddingVertical: 9,
+  },
+  visitBannerToday: {
+    backgroundColor: ORANGE_SOFT,
+    borderTopColor: '#FED7AA',
+  },
+  visitBannerOverdue: {
+    backgroundColor: '#FFF5F5',
+    borderTopColor: '#FECACA',
+  },
+  visitBannerUpcoming: {
+    backgroundColor: GREEN_SOFT,
+    borderTopColor: '#BBF7D0',
+  },
+  visitBannerText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: MUTED,
+  },
+  visitBannerTextToday:    { color: ORANGE },
+  visitBannerTextOverdue:  { color: '#DC2626' },
+  visitBannerTextUpcoming: { color: GREEN },
+  visitBannerActivity: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: MUTED,
   },
   details: {
     flex: 1,
@@ -1709,5 +1876,59 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15,
     fontWeight: '900',
+  },
+  landsSectionHeader: {
+    marginTop: 24,
+    marginBottom: 10,
+  },
+  filterChipsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+    flexWrap: 'wrap',
+  },
+  filterChip: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+    backgroundColor: '#F5F8FB',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  filterChipActive: {
+    borderColor: CARD_BORDER,
+  },
+  filterChipToday: {
+    backgroundColor: ORANGE_SOFT,
+    borderColor: '#FED7AA',
+  },
+  filterChipOverdue: {
+    backgroundColor: '#FFF5F5',
+    borderColor: '#FECACA',
+  },
+  filterChipUpcoming: {
+    backgroundColor: GREEN_SOFT,
+    borderColor: '#BBF7D0',
+  },
+  filterChipText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: MUTED,
+  },
+  filterChipTextActive: {
+    fontWeight: '900',
+    color: INK,
+  },
+  emptyFilterBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 40,
+  },
+  emptyFilterText: {
+    color: MUTED,
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });

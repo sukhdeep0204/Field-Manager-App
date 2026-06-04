@@ -19,6 +19,12 @@ import Icon from '../components/Icon';
 import { useLanguage } from '../context/LanguageContext';
 import {API_BASE_URL} from '../config';
 import {loadSession, type FarmDetail, type FarmerDetail} from '../auth/session';
+import StockIssuePopup, {type StockIssuedItem} from '../components/StockIssuePopup';
+import InventoryStepPopup from '../components/steps/InventoryStepPopup';
+import LogisticsStepPopup from '../components/steps/LogisticsStepPopup';
+import CultivationStepPopup from '../components/steps/CultivationStepPopup';
+import InspectionStepPopup from '../components/steps/InspectionStepPopup';
+import OthersStepPopup from '../components/steps/OthersStepPopup';
 
 const INK = '#070B1A';
 const MUTED = '#43506F';
@@ -44,12 +50,14 @@ type Task = {
   dueTime: string;
   assignedAcres?: string;
   vehicles?: Array<{
-    vehicle_id: string;
+    vehicle_id?: string;
+    vendor_id?: string;
     vehicle_number: string;
   }>;
   equipment?: Array<{
     equipment_name: string;
     quantity: number;
+    vendor_id?: string;
   }>;
   equipmentOtp?: string;
   transportCoordinationStatus?: string;
@@ -60,6 +68,7 @@ type Task = {
   status: string;
   allocation: string;
   subTasks?: SubTask[];
+  onDemandSteps?: OnDemandSteps;
 };
 
 type ApiTask = {
@@ -83,14 +92,17 @@ type ApiTask = {
     supervisor_status: string;
   };
   vehicles: Array<{
-    vehicle_id: string;
+    vehicle_id?: string;
+    vendor_id?: string;
     vehicle_number: string;
   }>;
   equipment: Array<{
     equipment_name: string;
-    equipment_id: string;
+    equipment_id?: string;
+    vendor_id?: string;
     quantity: number;
   }>;
+  steps?: OnDemandSteps;
 };
 
 type ApiFieldVisitTask = {
@@ -108,6 +120,13 @@ type ApiFieldVisitTask = {
     completed_acres: number;
   }>;
   created_at: string;
+};
+
+type ApiOnDemandTask = {
+  task_id: string;
+  staff_id: string;
+  created_at: string;
+  steps_dict: OnDemandSteps;
 };
 
 type FieldVisit = {
@@ -133,6 +152,69 @@ type TransportVehicle = {
   driver_name: string;
 };
 
+type VendorDetail = {
+  vendor_name: string;
+  vendor_contact: string;
+};
+
+type FarmerDetails = {
+  owner_name?: string;
+  address?: string;
+  farmer_id?: string;
+  contact?: string;
+};
+
+type LandData = {
+  land_coordinates?: number[][];
+  farming_option?: string;
+  state?: string;
+  village?: string;
+  district?: string;
+  land_media?: { images?: string[]; video?: string };
+};
+
+type FarmDetails = {
+  area?: number;
+  land_data?: LandData;
+  crop_type?: string;
+  farm_id?: string;
+};
+
+type OnDemandStepData = {
+  // inventory
+  item_name?: string;
+  unit?: string;
+  quantity?: number;
+  equipment_id?: string;
+  // logistics
+  vehicle_id?: string;
+  vehicle_number?: string;
+  // cultivation
+  due_date?: string;
+  activity?: string;
+  farmer_details?: FarmerDetails;
+  farm_details?: FarmDetails;
+  farm_id?: string;
+  // inspection — each data item is one field
+  field_name?: string;
+  input_type?: string;
+  mandetory?: boolean;
+  response?: string | null;
+  options?: string[];
+  // others
+  description?: string;
+};
+
+type OnDemandStep = {
+  type: 'logistics' | 'inventory' | 'cultivation' | 'inspection' | 'others';
+  data: OnDemandStepData[];
+  status: 'pending' | 'completed';
+  equipment_otp?: string;
+  task_media?: string[];
+};
+
+type OnDemandSteps = Record<string, OnDemandStep>;
+
 type SubTask = {
   id: string;
   title: string;
@@ -157,25 +239,23 @@ type TaskGroup = {
   tasks: Task[];
 };
 
-type TopView = 'tasks' | 'fieldvisits';
-
 export default function TasksScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useLanguage();
-  const [topView, setTopView] = useState<TopView>('tasks');
   const [activeTab, setActiveTab] = useState<
     'assigned' | 'pending' | 'completed'
   >('assigned');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [stepPopup, setStepPopup] = useState<{ task: Task; key: string } | null>(null);
   const [statusOverrides, setStatusOverrides] = useState<
     Record<string, string>
   >({});
-  const [selectedVisit, setSelectedVisit] = useState<FieldVisit | null>(null);
+  const [stockPopupOpen, setStockPopupOpen] = useState(false);
+  const [stockTask, setStockTask] = useState<Task | null>(null);
+  const [issuedItems, setIssuedItems] = useState<StockIssuedItem[]>([]);
   const [apiTasks, setApiTasks] = useState<Task[]>([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [fieldVisitTasks, setFieldVisitTasks] = useState<FieldVisit[]>([]);
-  const [fieldVisitsLoaded, setFieldVisitsLoaded] = useState(false);
-  const [fieldVisitsLoading, setFieldVisitsLoading] = useState(false);
+  const [onDemandTasks, setOnDemandTasks] = useState<Task[]>([]);
 
   const fetchTasks = async () => {
     try {
@@ -204,93 +284,71 @@ export default function TasksScreen() {
 
   useEffect(() => {
     fetchTasks();
+    fetchIssuedItems();
+    fetchOnDemandTasks();
   }, []);
+
+  const fetchOnDemandTasks = async () => {
+    try {
+      const session = await loadSession();
+      const staffId = session?.profile?.staff_id;
+      if (!staffId) { return; }
+      const res = await fetch(
+        `${API_BASE_URL}/admin_ops_requests/get_on_demand_task/${encodeURIComponent(staffId)}`,
+      );
+      const data = await res.json();
+      if (!res.ok || !Array.isArray(data?.on_demand_tasks)) { return; }
+
+      const mapped: Task[] = (data.on_demand_tasks as ApiOnDemandTask[]).map(item => ({
+        taskId: item.task_id,
+        title: 'On Demand Task',
+        farmId: item.task_id,
+        location: '',
+        farmerName: 'Admin Assigned',
+        dueTime: formatOnDemandDate(item.created_at),
+        description: '',
+        assignedTo: item.staff_id,
+        priority: 'Normal',
+        status: 'Assigned',
+        allocation: '',
+        onDemandSteps: item.steps_dict,
+      }));
+
+      setOnDemandTasks(mapped);
+    } catch {
+      // keep empty
+    }
+  };
+
+  const fetchIssuedItems = async () => {
+    try {
+      const session = await loadSession();
+      const staffId = session?.profile?.staff_id;
+      if (!staffId) { return; }
+      const res = await fetch(`${API_BASE_URL}/inventory/get_my_issued_items/${encodeURIComponent(staffId)}`);
+      const data = await res.json();
+      if (res.ok && Array.isArray(data?.issued_items)) {
+        setIssuedItems(data.issued_items as StockIssuedItem[]);
+      }
+    } catch {
+      // keep empty
+    }
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchTasks();
+    await Promise.all([fetchTasks(), fetchOnDemandTasks()]);
     setRefreshing(false);
   };
 
-  const fetchFieldVisits = async () => {
-    try {
-      setFieldVisitsLoading(true);
-      const session = await loadSession();
-      const farmIds = session?.farmAccess?.farm_ids ?? [];
-      const farmDetails = session?.farmDetails ?? [];
-      const farmerDetails = session?.farmerDetails ?? ({} as Record<string, FarmerDetail>);
-      if (!farmIds.length) {
-        return;
-      }
 
-      const response = await fetch(`${API_BASE_URL}/admin_all_task/get_all_field_visit_tasks`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({farm_id: farmIds}),
-      });
-      const data = await response.json();
-      if (!response.ok || !Array.isArray(data)) {
-        return;
-      }
+  const [taskFilter, setTaskFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
 
-      const locationByFarmId = new Map(
-        farmDetails.map(item => [
-          item.farm.farm_id,
-          `${item.farm.land_data.village}, ${item.farm.land_data.district}`,
-        ]),
-      );
-      const farmerIdByFarmId = new Map(
-        farmDetails.map(item => [item.farm.farm_id, item.farm.farmer_id]),
-      );
-
-      const visitColors = [
-        {color: ORANGE_TEXT, bg: '#FFF4EE'},
-        {color: BLUE, bg: BLUE_SOFT},
-        {color: GREEN, bg: GREEN_SOFT},
-      ];
-
-      const mapped: FieldVisit[] = (data as ApiFieldVisitTask[]).map((task, index) => {
-        const firstAssigned = task.assigned_acres?.[0];
-        const farmId = firstAssigned?.farm_id || task.feild_id?.[0] || '-';
-        const farmerId = farmerIdByFarmId.get(farmId);
-        const farmerName = farmerId
-          ? (farmerDetails[farmerId]?.farmer?.farmer_name || '-')
-          : '-';
-        const {color, bg} = visitColors[index % visitColors.length];
-
-        return {
-          id: task.task_id,
-          landId: farmId,
-          location: locationByFarmId.get(farmId) || '-',
-          farmerName,
-          activity: firstAssigned?.activity || 'Field Visit',
-          scheduledDate: firstAssigned?.date || '-',
-          scheduledTime: '-',
-          color,
-          bg,
-          items: [],
-          borewells: 0,
-          assignedAcres: firstAssigned?.assigned_acres ?? 0,
-          allocatedAcres: task.allocation_schema?.[0]?.allocated_acres ?? 0,
-        };
-      });
-
-      setFieldVisitTasks(mapped);
-      setFieldVisitsLoaded(true);
-    } catch {
-      // keep empty list
-    } finally {
-      setFieldVisitsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (topView === 'fieldvisits' && !fieldVisitsLoaded) {
-      fetchFieldVisits();
-    }
-  }, [topView]);
-
-  const taskSource = apiTasks.length ? apiTasks : flattenGroups(TASK_GROUPS);
+  const taskSource = [
+    ...(apiTasks.length ? apiTasks : flattenGroups(TASK_GROUPS)),
+    ...onDemandTasks,
+    ...(apiTasks.length === 0 && onDemandTasks.length === 0 ? [DEMO_ON_DEMAND_TASK] : []),
+  ];
   const assignedTasks = taskSource.filter(
     task => task.status.toLowerCase() === 'assigned' || task.status.toLowerCase() === 'in progress',
   );
@@ -299,12 +357,39 @@ export default function TasksScreen() {
   );
   const completedTasks = taskSource.filter(task => task.status.toLowerCase() === 'completed');
 
-  const visibleTasks =
+  const tabTasks =
     activeTab === 'assigned'
       ? assignedTasks
       : activeTab === 'pending'
       ? pendingTasks
       : completedTasks;
+
+  const visibleTasks = taskFilter === 'all'
+    ? tabTasks
+    : tabTasks.filter(task => {
+        const d = parseDueDate(task.dueTime);
+        if (!d) { return false; }
+        const now = new Date();
+        if (taskFilter === 'today') {
+          return d.getFullYear() === now.getFullYear() &&
+            d.getMonth() === now.getMonth() &&
+            d.getDate() === now.getDate();
+        }
+        if (taskFilter === 'week') {
+          const startOfWeek = new Date(now);
+          startOfWeek.setDate(now.getDate() - now.getDay());
+          startOfWeek.setHours(0, 0, 0, 0);
+          const endOfWeek = new Date(startOfWeek);
+          endOfWeek.setDate(startOfWeek.getDate() + 6);
+          endOfWeek.setHours(23, 59, 59, 999);
+          return d >= startOfWeek && d <= endOfWeek;
+        }
+        if (taskFilter === 'month') {
+          return d.getFullYear() === now.getFullYear() &&
+            d.getMonth() === now.getMonth();
+        }
+        return true;
+      });
   const assignedTaskCount = assignedTasks.length;
   const pendingTaskCount = pendingTasks.length;
 
@@ -316,17 +401,25 @@ export default function TasksScreen() {
     <View style={styles.root}>
       <FlatList
         style={styles.scroll}
-        data={topView === 'tasks' ? visibleTasks : []}
+        data={visibleTasks}
         keyExtractor={(task) => `${task.farmId}-${task.dueTime}-${task.title}`}
-        renderItem={({ item: task }) => (
-          <TaskCard
-            task={task}
-            color={cardColor}
-            cardBg={cardBg}
-            borderColor={cardBorderColor}
-            onPress={() => setSelectedTask(task)}
-          />
-        )}
+        renderItem={({ item: task }) =>
+          task.onDemandSteps ? (
+            <OnDemandTaskCard
+              task={task}
+              onStepPress={(key) => setStepPopup({ task, key })}
+            />
+          ) : (
+            <TaskCard
+              task={task}
+              color={cardColor}
+              cardBg={cardBg}
+              borderColor={cardBorderColor}
+              onPress={() => setSelectedTask(task)}
+              onIssueItem={() => { setStockTask(task); setStockPopupOpen(true); }}
+            />
+          )
+        }
         ListHeaderComponent={(
           <View>
             <View style={styles.header}>
@@ -348,129 +441,52 @@ export default function TasksScreen() {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.switchBar}>
+            <View style={styles.tabs}>
               <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => setTopView('tasks')}
-                style={[styles.switchBtn, topView === 'tasks' && styles.switchBtnActive]}
+                activeOpacity={0.75}
+                onPress={() => { setActiveTab('assigned'); setTaskFilter('all'); }}
+                style={styles.tabButton}
               >
-                <Icon name="ClipboardList" size={15} color={topView === 'tasks' ? '#FFFFFF' : MUTED} />
-                <Text style={[styles.switchText, topView === 'tasks' && styles.switchTextActive]}>Tasks</Text>
-                <View style={[styles.switchCount, topView === 'tasks' && styles.switchCountActive]}>
-                  <Text style={[styles.switchCountText, topView === 'tasks' && styles.switchCountTextActive]}>
-                    {assignedTaskCount + pendingTaskCount}
-                  </Text>
-                </View>
+                <Text style={[styles.tabText, activeTab === 'assigned' && styles.activeTabText]}>
+                  {t('assigned')} ({assignedTaskCount})
+                </Text>
+                {activeTab === 'assigned' ? <View style={styles.activeIndicator} /> : null}
               </TouchableOpacity>
               <TouchableOpacity
-                activeOpacity={0.8}
-                onPress={() => setTopView('fieldvisits')}
-                style={[styles.switchBtn, topView === 'fieldvisits' && styles.switchBtnActive]}
+                activeOpacity={0.75}
+                onPress={() => { setActiveTab('pending'); setTaskFilter('all'); }}
+                style={styles.tabButton}
               >
-                <Icon name="MapPin" size={15} color={topView === 'fieldvisits' ? '#FFFFFF' : MUTED} />
-                <Text style={[styles.switchText, topView === 'fieldvisits' && styles.switchTextActive]}>Field Visits</Text>
-                <View style={[styles.switchCount, topView === 'fieldvisits' && styles.switchCountActive]}>
-                  <Text style={[styles.switchCountText, topView === 'fieldvisits' && styles.switchCountTextActive]}>
-                    {fieldVisitTasks.length}
-                  </Text>
-                </View>
+                <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>
+                  {t('pending')} ({pendingTaskCount})
+                </Text>
+                {activeTab === 'pending' ? <View style={styles.activeIndicator} /> : null}
+              </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.75}
+                onPress={() => { setActiveTab('completed'); setTaskFilter('all'); }}
+                style={styles.tabButton}
+              >
+                <Text style={[styles.tabText, activeTab === 'completed' && styles.activeTabText]}>
+                  {t('completed')}
+                </Text>
+                {activeTab === 'completed' ? <View style={styles.activeIndicator} /> : null}
               </TouchableOpacity>
             </View>
-
-            {topView === 'tasks' ? (
-              <>
-                <View style={styles.tabs}>
-                  <TouchableOpacity
-                    activeOpacity={0.75}
-                    onPress={() => setActiveTab('assigned')}
-                    style={styles.tabButton}
-                  >
-                    <Text style={[styles.tabText, activeTab === 'assigned' && styles.activeTabText]}>
-                      {t('assigned')} ({assignedTaskCount})
-                    </Text>
-                    {activeTab === 'assigned' ? <View style={styles.activeIndicator} /> : null}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    activeOpacity={0.75}
-                    onPress={() => setActiveTab('pending')}
-                    style={styles.tabButton}
-                  >
-                    <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>
-                      {t('pending')} ({pendingTaskCount})
-                    </Text>
-                    {activeTab === 'pending' ? <View style={styles.activeIndicator} /> : null}
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    activeOpacity={0.75}
-                    onPress={() => setActiveTab('completed')}
-                    style={styles.tabButton}
-                  >
-                    <Text style={[styles.tabText, activeTab === 'completed' && styles.activeTabText]}>
-                      {t('completed')}
-                    </Text>
-                    {activeTab === 'completed' ? <View style={styles.activeIndicator} /> : null}
-                  </TouchableOpacity>
-                </View>
-                <View style={styles.group}>
-                  <Text style={[styles.groupTitle, { color: activeTab === 'completed' ? GREEN : ORANGE_TEXT }]}>
-                    {activeTab === 'completed' ? t('completed') : activeTab === 'pending' ? t('pending') : t('assigned')}
+            <View style={styles.filterBar}>
+              {(['all', 'today', 'week', 'month'] as const).map(f => (
+                <TouchableOpacity
+                  key={f}
+                  activeOpacity={0.78}
+                  onPress={() => setTaskFilter(f)}
+                  style={[styles.filterChip, taskFilter === f && styles.filterChipActive]}
+                >
+                  <Text style={[styles.filterChipText, taskFilter === f && styles.filterChipTextActive]}>
+                    {f === 'all' ? 'All' : f === 'today' ? 'Today' : f === 'week' ? 'This Week' : 'This Month'}
                   </Text>
-                </View>
-              </>
-            ) : (
-              <>
-                <View style={styles.fvSectionHeader}>
-                  <Text style={styles.fvSectionTitle}>Upcoming Field Visits</Text>
-                  <View style={styles.fvCountBadge}>
-                    <Text style={styles.fvCountText}>{fieldVisitTasks.length}</Text>
-                  </View>
-                </View>
-
-                {fieldVisitsLoading ? (
-                  <View style={styles.emptyVisitsBox}>
-                    <Text style={styles.emptyVisitsText}>Loading field visits...</Text>
-                  </View>
-                ) : fieldVisitTasks.length === 0 ? (
-                  <View style={styles.emptyVisitsBox}>
-                    <Icon name="CalendarCheck" size={32} color={MUTED} />
-                    <Text style={styles.emptyVisitsText}>No upcoming field visits.</Text>
-                  </View>
-                ) : fieldVisitTasks.map(visit => (
-                  <TouchableOpacity
-                    key={visit.id}
-                    activeOpacity={0.82}
-                    onPress={() => setSelectedVisit(visit)}
-                    style={[styles.visitCard, { backgroundColor: visit.bg, borderColor: visit.color + '50' }]}
-                  >
-                    <View style={styles.visitCardTop}>
-                      <View style={[styles.visitDot, { backgroundColor: visit.color }]} />
-                      <Text style={[styles.visitActivity, { color: visit.color }]} numberOfLines={1}>
-                        {visit.activity}
-                      </Text>
-                      <View style={[styles.visitTimePill, { backgroundColor: visit.color + '20' }]}>
-                        <Icon name="Clock3" size={11} color={visit.color} />
-                        <Text style={[styles.visitTimePillText, { color: visit.color }]}>
-                          {visit.scheduledDate}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={styles.visitLandId}>{visit.landId}</Text>
-                    <Text style={styles.visitFarmer}>{visit.farmerName}</Text>
-                    <View style={styles.visitRow}>
-                      <Icon name="MapPin" size={13} color={MUTED} />
-                      <Text style={styles.visitMeta}>{visit.location}</Text>
-                    </View>
-                    <View style={styles.visitFooterRow}>
-                      <View style={styles.visitPill}>
-                        <Icon name="Sprout" size={12} color={MUTED} />
-                        <Text style={styles.visitPillText}>{visit.assignedAcres} acres</Text>
-                      </View>
-                      <Text style={[styles.visitTapHintText, { color: visit.color, marginLeft: 'auto' as const }]}>Tap to log →</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </>
-            )}
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         )}
         refreshControl={
@@ -491,18 +507,9 @@ export default function TasksScreen() {
         windowSize={5}
       />
 
-      <VisitDetailModal
-        visit={selectedVisit}
-        onClose={() => setSelectedVisit(null)}
-        onSave={() => {
-          setSelectedVisit(null);
-          Alert.alert('Visit Saved', 'Field visit has been logged successfully.');
-        }}
-      />
-
       <TaskDetailModal
         task={
-          selectedTask
+          selectedTask && !selectedTask.onDemandSteps
             ? {
                 ...selectedTask,
                 status:
@@ -512,6 +519,130 @@ export default function TasksScreen() {
         }
         onClose={() => setSelectedTask(null)}
       />
+
+
+      {/* Step-type popups — rendered at root level to avoid nested-Modal issue */}
+      {stepPopup && stepPopup.task.onDemandSteps?.[stepPopup.key] ? (() => {
+        const step = stepPopup.task.onDemandSteps![stepPopup.key];
+        const props = {
+          visible: true as const,
+          step,
+          stepKey: stepPopup.key,
+          taskId: stepPopup.task.taskId,
+          onClose: () => setStepPopup(null),
+          onComplete: () => setStepPopup(null),
+        };
+        switch (step.type) {
+          case 'inventory':   return <InventoryStepPopup   {...props} />;
+          case 'logistics':   return <LogisticsStepPopup   {...props} />;
+          case 'cultivation': return <CultivationStepPopup {...props} />;
+          case 'inspection':  return <InspectionStepPopup  {...props} />;
+          default:            return <OthersStepPopup      {...props} />;
+        }
+      })() : null}
+
+      <StockIssuePopup
+        visible={stockPopupOpen}
+        taskTitle={stockTask ? stockTask.title : ''}
+        farmId={stockTask ? stockTask.farmId : ''}
+        issuedItems={issuedItems}
+        vehicles={stockTask?.vehicles ?? []}
+        onClose={() => { setStockPopupOpen(false); setStockTask(null); }}
+        onConfirm={allocations => {
+          console.log('[stock] allocation confirmed', allocations);
+          setStockPopupOpen(false);
+          setStockTask(null);
+        }}
+      />
+    </View>
+  );
+}
+
+function OnDemandTaskCard({
+  task,
+  onStepPress,
+}: {
+  task: Task;
+  onStepPress: (stepKey: string) => void;
+}) {
+  const steps = task.onDemandSteps ?? {};
+  const sortedSteps = Object.entries(steps).sort(([a], [b]) =>
+    parseInt(a.replace('step_', ''), 10) - parseInt(b.replace('step_', ''), 10),
+  );
+  const total = sortedSteps.length;
+  const done = sortedSteps.filter(([, s]) => s.status === 'completed').length;
+
+  return (
+    <View style={styles.odCard}>
+
+      {/* ── Header + meta (non-interactive) ── */}
+      <View style={styles.odCardHeader}>
+        <View style={styles.odCardIconWrap}>
+          <Icon name="Zap" size={16} color={ORANGE_TEXT} />
+        </View>
+        <View style={styles.odCardTitleWrap}>
+          <Text style={styles.odCardTitle} numberOfLines={1}>{task.title}</Text>
+          <Text style={styles.odCardSub} numberOfLines={1}>
+            {task.farmerName} · {task.farmId}
+          </Text>
+        </View>
+        <View style={styles.odCardBadge}>
+          <Text style={styles.odCardBadgeText}>On Demand</Text>
+        </View>
+      </View>
+
+      <View style={styles.odCardMeta}>
+        <Icon name="CalendarDays" size={12} color={MUTED} />
+        <Text style={styles.odCardDateText}>{task.dueTime}</Text>
+        <View style={styles.odCardCountPill}>
+          <Text style={styles.odCardStepCount}>{done}/{total} done</Text>
+        </View>
+      </View>
+
+      {/* ── Flowchart — each node is tappable ── */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.odFlowScroll}
+      >
+        {sortedSteps.map(([key, step], i) => {
+          const cfg = STEP_TYPE_CONFIG[step.type] ?? STEP_TYPE_CONFIG.others;
+          const isDone = step.status === 'completed';
+          const isActive = !isDone && i === done;
+          const nodeColor = isDone ? GREEN : isActive ? cfg.color : '#B0BDC8';
+          const nodeBg = isDone ? GREEN_SOFT : isActive ? cfg.bg : '#F4F6F8';
+          return (
+            <View key={key} style={styles.odFlowItem}>
+              {/* Step node — tappable */}
+              <TouchableOpacity
+                activeOpacity={0.78}
+                onPress={() => onStepPress(key)}
+                style={[styles.odFlowNode, { borderColor: nodeColor, backgroundColor: nodeBg }]}
+              >
+                <View style={[styles.odFlowNodeTop, { backgroundColor: nodeColor + '28' }]}>
+                  <Icon name={cfg.icon} size={26} color={nodeColor} />
+                  <Text style={[styles.odFlowNodeType, { color: nodeColor }]}>{cfg.label}</Text>
+                </View>
+                <View style={[styles.odFlowStatus, { backgroundColor: nodeColor + '18' }]}>
+                  <View style={[styles.odFlowDot, { backgroundColor: nodeColor }]} />
+                  <Text style={[styles.odFlowStatusText, { color: nodeColor }]}>
+                    {isDone ? 'Done' : 'Pending'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Connector */}
+              {i < total - 1 ? (
+                <View style={styles.odFlowConnector}>
+                  <View style={[styles.odFlowLine, { backgroundColor: isDone ? GREEN : CARD_BORDER }]} />
+                  <Icon name="ChevronRight" size={13} color={isDone ? GREEN : '#B0BDC8'} />
+                </View>
+              ) : null}
+            </View>
+          );
+        })}
+      </ScrollView>
+
     </View>
   );
 }
@@ -519,43 +650,152 @@ export default function TasksScreen() {
 function TaskCard({
   task,
   color,
-  cardBg,
-  borderColor,
   onPress,
+  onIssueItem,
 }: {
   task: Task;
   color: string;
   cardBg: string;
   borderColor: string;
   onPress: () => void;
+  onIssueItem?: () => void;
 }) {
   const { language } = useLanguage();
-  const [subTaskOwners, setSubTaskOwners] = useState<Record<string, string>>(
-    {},
-  );
-  const [pickupProofs, setPickupProofs] = useState<Record<string, boolean>>({});
-  const [dropProofs, setDropProofs] = useState<Record<string, boolean>>({});
-  const [completedSubTasks, setCompletedSubTasks] = useState<
-    Record<string, boolean>
-  >({});
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignedTo, setAssignedTo] = useState<string | null>(null);
+  const transportDone = (task.transportCoordinationStatus || '').toLowerCase() === 'completed';
+  const equipmentDone = (task.equipmentCoordinationStatus || '').toLowerCase() === 'completed';
+  const hasTransport = Boolean(task.vehicles?.length);
+  const isCompleted = task.status.toLowerCase() === 'completed';
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.82}
-      onPress={onPress}
-      style={[styles.taskCard, { backgroundColor: cardBg, borderColor }]}
-    >
-      <View style={[styles.cardAccent, { backgroundColor: color }]} />
-      <View style={styles.taskDetails}>
-        <Text style={styles.taskTitle}>
-          {translateTaskText(task.title, language)}
-        </Text>
-        <DetailRow label="Farm ID" value={task.farmId} />
-        <DetailRow label="Location" value={task.location} />
-        <DetailRow label="Farmer's name" value={task.farmerName} />
-        <DetailRow label="Due date" value={task.dueTime} valueColor={color} />
-        <DetailRow label="Assigned acres" value={task.assignedAcres ?? '-'} />
+    <TouchableOpacity activeOpacity={0.95} onPress={onPress} style={styles.taskCard2}>
+
+      {/* ── Land Visual Strip ── */}
+      <View style={styles.landStrip}>
+        {[0,1,2,3,4,5,6,7,8,9].map(i => (
+          <View key={i} style={[styles.fieldRowLine, { top: 6 + i * 11 }]} />
+        ))}
+        <View style={styles.landStripOverlay} />
+        <View style={styles.landStripContent}>
+          <View style={styles.farmIdBadge}>
+            <Icon name="MapPin" size={10} color="#FFFFFF" />
+            <Text style={styles.farmIdBadgeText} numberOfLines={1}>
+              {task.farmId.length > 12 ? task.farmId.slice(0, 12) + '…' : task.farmId}
+            </Text>
+          </View>
+          <View style={styles.acresBadge}>
+            <Icon name="Sprout" size={10} color={GREEN} />
+            <Text style={styles.acresBadgeText}>{task.assignedAcres ?? '-'} ac</Text>
+          </View>
+        </View>
       </View>
+
+      {/* ── Task Info ── */}
+      <View style={styles.taskCardBody}>
+        <View style={styles.taskCardTitleRow}>
+          <Text style={styles.taskCardActivity} numberOfLines={1}>
+            {translateTaskText(task.title, language)}
+          </Text>
+          <TouchableOpacity
+            activeOpacity={0.78}
+            onPress={() => setAssignOpen(o => !o)}
+            style={[styles.assignSelector, { borderColor: color + '60', backgroundColor: color + '0E' }]}>
+            <Icon name="UserPlus" size={11} color={color} />
+            <Text style={[styles.assignSelectorText, { color }]} numberOfLines={1}>
+              {assignedTo ?? 'Assign To'}
+            </Text>
+            <Icon name={assignOpen ? 'ChevronUp' : 'ChevronDown'} size={11} color={color} />
+          </TouchableOpacity>
+        </View>
+
+        {assignOpen ? (
+          <View style={styles.assignDropdown}>
+            {TASK_SUPERVISORS.map(name => (
+              <TouchableOpacity
+                key={name}
+                activeOpacity={0.78}
+                onPress={() => { setAssignedTo(name); setAssignOpen(false); }}
+                style={styles.assignDropdownItem}>
+                <Icon name="User" size={13} color={assignedTo === name ? color : MUTED} />
+                <Text style={[styles.assignDropdownName, assignedTo === name && { color }]}>{name}</Text>
+                {assignedTo === name ? <Icon name="Check" size={13} color={color} /> : null}
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
+
+        <View style={styles.taskCardInfoRow}>
+          <Icon name="User" size={12} color={MUTED} />
+          <Text style={styles.taskCardInfoText} numberOfLines={1}>{task.farmerName}</Text>
+          <View style={styles.infoDot} />
+          <Icon name="MapPin" size={12} color={MUTED} />
+          <Text style={styles.taskCardInfoText} numberOfLines={1}>{task.location}</Text>
+        </View>
+
+        <View style={styles.taskCardDueRow}>
+          <Icon name="CalendarDays" size={12} color={color} />
+          <Text style={[styles.taskCardDueText, { color }]}>Due: {task.dueTime}</Text>
+        </View>
+      </View>
+
+      {/* ── Divider ── */}
+      <View style={styles.taskCardDivider} />
+
+      {/* ── Action Chips ── */}
+      <View style={styles.taskActionsWrap}>
+        {hasTransport ? (
+          <TaskActionChip icon="Truck" label="Transport" done={transportDone} color={color} onPress={onPress} />
+        ) : null}
+        <TaskActionChip icon="Settings2" label="Equipment" done={equipmentDone} color={color} onPress={onPress} />
+        <TaskActionChip icon="PackagePlus" label="Issue Item" done={false} color={color} onPress={() => onIssueItem ? onIssueItem() : onPress()} />
+      </View>
+
+      {/* ── Complete Task Button ── */}
+      <TouchableOpacity
+        activeOpacity={0.82}
+        onPress={onPress}
+        style={[styles.completeTaskBtn, isCompleted && styles.completeTaskBtnDone, { borderColor: color + '60' }]}
+      >
+        <Icon name={isCompleted ? 'CheckCircle2' : 'CircleCheck'} size={15} color={isCompleted ? GREEN : color} />
+        <Text style={[styles.completeTaskBtnText, { color: isCompleted ? GREEN : color }]}>
+          {isCompleted ? 'Completed' : 'Complete Task'}
+        </Text>
+      </TouchableOpacity>
+
+    </TouchableOpacity>
+  );
+}
+
+const TASK_SUPERVISORS = [
+  'Rahul Sharma',
+  'Priya Singh',
+  'Amit Kumar',
+  'Sunita Verma',
+  'Deepak Patel',
+];
+
+function TaskActionChip({
+  icon,
+  label,
+  done,
+  color,
+  onPress,
+}: {
+  icon: string;
+  label: string;
+  done: boolean;
+  color: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      activeOpacity={0.78}
+      onPress={onPress}
+      style={[styles.taskActionChip, done ? styles.taskActionChipDone : { borderColor: color + '50', backgroundColor: color + '0C' }]}
+    >
+      <Icon name={done ? 'CheckCircle2' : icon} size={12} color={done ? GREEN : color} />
+      <Text style={[styles.taskActionChipText, { color: done ? GREEN : color }]}>{label}</Text>
     </TouchableOpacity>
   );
 }
@@ -588,6 +828,12 @@ function TaskDetailModal({
   const [uploadingTaskImages, setUploadingTaskImages] = useState(false);
   const [taskProgressImageUrls, setTaskProgressImageUrls] = useState<string[]>([]);
   const [transportVehicles, setTransportVehicles] = useState<TransportVehicle[]>([]);
+  const [transportVendor, setTransportVendor] = useState<VendorDetail | null>(null);
+  const [equipmentVendor, setEquipmentVendor] = useState<VendorDetail | null>(null);
+  const [completedSubTasks, setCompletedSubTasks] = useState<Record<string, boolean>>({});
+  const [pickupProofs, setPickupProofs] = useState<Record<string, boolean>>({});
+  const [dropProofs, setDropProofs] = useState<Record<string, boolean>>({});
+  const [subTaskOwners] = useState<Record<string, string>>({});
   const prerequisiteSubTasks =
     task?.subTasks?.filter(subTask => !isMainTaskSubTask(task, subTask)) ?? [];
   const isWorkPending = task?.status === 'Work Pending';
@@ -857,6 +1103,17 @@ function TaskDetailModal({
     setCompletingTask(false);
     setEquipmentReceiptAttached(false);
     setEquipmentImageUrl('');
+    setTransportVendor(null);
+    setEquipmentVendor(null);
+
+    const transportVendorId = task?.vehicles?.find(v => v.vendor_id)?.vendor_id;
+    const equipmentVendorId = task?.equipment?.find(e => e.vendor_id)?.vendor_id;
+    if (transportVendorId) {
+      fetchVendorDetails(transportVendorId).then(setTransportVendor);
+    }
+    if (equipmentVendorId) {
+      fetchVendorDetails(equipmentVendorId).then(setEquipmentVendor);
+    }
   }, [task?.taskId]);
 
   useEffect(() => {
@@ -1101,37 +1358,54 @@ function TaskDetailModal({
 
                 {hasTransportCoordination ? (
                   <View style={styles.cleanSection}>
-                    <Text style={styles.cleanSectionTitle}>Transport Coordination</Text>
-                    <Text style={styles.descriptionText}>
-                      TASK: coordinate with the driver to do this task
+                    <Text style={styles.cleanSectionTitle}>
+                      {transportVendor ? 'Vendor' : 'Transport Coordination'}
                     </Text>
-                    {transportVehicles.length ? (
-                      <View style={styles.transportTable}>
-                        <View style={styles.transportHeadRow}>
-                          <Text style={[styles.transportHeadCell, styles.transportCellName]}>Name</Text>
-                          <Text style={[styles.transportHeadCell, styles.transportCellPhone]}>Ph. No.</Text>
-                          <Text style={[styles.transportHeadCell, styles.transportCellVehicle]}>Vehicle</Text>
-                          <Text style={[styles.transportHeadCell, styles.transportCellNumber]}>V.No.</Text>
+                    {transportVendor ? (
+                      <View style={styles.vendorInfoCard}>
+                        <View style={styles.vendorInfoRow}>
+                          <Icon name="Building2" size={14} color={MUTED} />
+                          <Text style={styles.vendorInfoText}>{transportVendor.vendor_name}</Text>
                         </View>
-                        {transportVehicles.map(vehicle => (
-                          <View key={`${vehicle.vehicle_number}-${vehicle.driver_name}`} style={styles.transportBodyRow}>
-                            <Text style={[styles.transportBodyCell, styles.transportCellName]}>
-                              {vehicle.driver_name || '-'}
-                            </Text>
-                            <Text style={[styles.transportBodyCell, styles.transportCellPhone]}>
-                              {vehicle.driver_contact || '-'}
-                            </Text>
-                            <Text style={[styles.transportBodyCell, styles.transportCellVehicle]}>
-                              {vehicle.vehicle_model || '-'}
-                            </Text>
-                            <Text style={[styles.transportBodyCell, styles.transportCellNumber]}>
-                              {vehicle.vehicle_number || '-'}
-                            </Text>
-                          </View>
-                        ))}
+                        <View style={styles.vendorInfoRow}>
+                          <Icon name="Phone" size={14} color={MUTED} />
+                          <Text style={styles.vendorInfoText}>{transportVendor.vendor_contact}</Text>
+                        </View>
                       </View>
                     ) : (
-                      <Text style={styles.descriptionText}>No transport data found.</Text>
+                      <>
+                        <Text style={styles.descriptionText}>
+                          TASK: coordinate with the driver to do this task
+                        </Text>
+                        {transportVehicles.length ? (
+                          <View style={styles.transportTable}>
+                            <View style={styles.transportHeadRow}>
+                              <Text style={[styles.transportHeadCell, styles.transportCellName]}>Name</Text>
+                              <Text style={[styles.transportHeadCell, styles.transportCellPhone]}>Ph. No.</Text>
+                              <Text style={[styles.transportHeadCell, styles.transportCellVehicle]}>Vehicle</Text>
+                              <Text style={[styles.transportHeadCell, styles.transportCellNumber]}>V.No.</Text>
+                            </View>
+                            {transportVehicles.map(vehicle => (
+                              <View key={`${vehicle.vehicle_number}-${vehicle.driver_name}`} style={styles.transportBodyRow}>
+                                <Text style={[styles.transportBodyCell, styles.transportCellName]}>
+                                  {vehicle.driver_name || '-'}
+                                </Text>
+                                <Text style={[styles.transportBodyCell, styles.transportCellPhone]}>
+                                  {vehicle.driver_contact || '-'}
+                                </Text>
+                                <Text style={[styles.transportBodyCell, styles.transportCellVehicle]}>
+                                  {vehicle.vehicle_model || '-'}
+                                </Text>
+                                <Text style={[styles.transportBodyCell, styles.transportCellNumber]}>
+                                  {vehicle.vehicle_number || '-'}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        ) : (
+                          <Text style={styles.descriptionText}>No transport data found.</Text>
+                        )}
+                      </>
                     )}
                     <TouchableOpacity
                       activeOpacity={0.8}
@@ -1148,82 +1422,103 @@ function TaskDetailModal({
 
                 {hasEquipmentCoordination ? (
                   <View style={styles.cleanSection}>
-                    <Text style={styles.cleanSectionTitle}>Equipment Coordination</Text>
-                    <Text style={styles.descriptionText}>
-                      TASK: get these items from the inventory
+                    <Text style={styles.cleanSectionTitle}>
+                      {equipmentVendor ? 'Vendor' : 'Equipment Coordination'}
                     </Text>
-                    <View style={styles.otpBox}>
-                      <Text style={styles.otpLabel}>OTP</Text>
-                      <Text style={styles.otpValue}>{task?.equipmentOtp || '-'}</Text>
-                    </View>
-                    <View style={styles.equipmentTable}>
-                      <View style={styles.equipmentHeadRow}>
-                        <Text style={[styles.equipmentHeadCell, styles.equipmentHeadLeft]}>
-                          Item Name
-                        </Text>
-                        <Text style={styles.equipmentHeadCell}>Quantity</Text>
+
+                    {equipmentVendor ? (
+                      /* ── Vendor case ── */
+                      <View style={styles.vendorInfoCard}>
+                        <View style={styles.vendorInfoRow}>
+                          <Icon name="Building2" size={14} color={MUTED} />
+                          <Text style={styles.vendorInfoText}>{equipmentVendor.vendor_name}</Text>
+                        </View>
+                        <View style={styles.vendorInfoRow}>
+                          <Icon name="Phone" size={14} color={MUTED} />
+                          <Text style={styles.vendorInfoText}>{equipmentVendor.vendor_contact}</Text>
+                        </View>
                       </View>
-                      {equipmentItems.map(item => (
-                        <View key={`${item.equipment_name}-${item.quantity}`} style={styles.equipmentBodyRow}>
-                          <Text style={[styles.equipmentBodyCell, styles.equipmentHeadLeft]}>
-                            {item.equipment_name}
+                    ) : equipmentItems.length === 0 ? (
+                      /* ── No equipment case ── */
+                      <Text style={styles.descriptionText}>No Equipment is needed</Text>
+                    ) : (
+                      /* ── Actual equipment case ── */
+                      <>
+                        <View style={styles.otpBox}>
+                          <Text style={styles.otpLabel}>OTP</Text>
+                          <Text style={styles.otpValue}>{task?.equipmentOtp || '-'}</Text>
+                        </View>
+                        <View style={styles.equipmentTable}>
+                          <View style={styles.equipmentHeadRow}>
+                            <Text style={[styles.equipmentHeadCell, styles.equipmentHeadLeft]}>
+                              Item Name
+                            </Text>
+                            <Text style={styles.equipmentHeadCell}>Quantity</Text>
+                          </View>
+                          {equipmentItems.map(item => (
+                            <View key={`${item.equipment_name}-${item.quantity}`} style={styles.equipmentBodyRow}>
+                              <Text style={[styles.equipmentBodyCell, styles.equipmentHeadLeft]}>
+                                {item.equipment_name}
+                              </Text>
+                              <Text style={styles.equipmentBodyCell}>{item.quantity}</Text>
+                            </View>
+                          ))}
+                        </View>
+                        <View style={styles.taskPhotoRow}>
+                          {equipmentPhotos.map((uri, index) => (
+                            <View key={`equipment-photo-${index}`} style={styles.taskPhotoBox}>
+                              {uri ? (
+                                <>
+                                  <Image source={{uri}} style={styles.taskPhotoPreview} resizeMode="cover" />
+                                  <TouchableOpacity
+                                    activeOpacity={0.8}
+                                    onPress={() => removeEquipmentPhoto(index)}
+                                    style={styles.taskPhotoRemove}>
+                                    <Icon name="X" size={14} color="#FFFFFF" />
+                                  </TouchableOpacity>
+                                </>
+                              ) : (
+                                <TouchableOpacity
+                                  activeOpacity={0.8}
+                                  onPress={() => openCameraForSlot(index, 'equipment')}
+                                  style={styles.taskPhotoAdd}>
+                                  <Icon name="Plus" size={18} color={BLUE} />
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          ))}
+                        </View>
+                        <TouchableOpacity
+                          activeOpacity={0.82}
+                          onPress={uploadEquipmentImages}
+                          disabled={!canUploadEquipmentImages}
+                          style={[
+                            styles.uploadEquipButton,
+                            !canUploadEquipmentImages && styles.uploadEquipButtonDisabled,
+                            equipmentReceiptAttached && styles.uploadEquipButtonDone,
+                          ]}
+                        >
+                          <Icon
+                            name={equipmentReceiptAttached ? 'CheckCircle2' : 'ImageUp'}
+                            size={18}
+                            color={equipmentReceiptAttached ? GREEN : BLUE}
+                          />
+                          <Text
+                            style={[
+                              styles.uploadEquipText,
+                              equipmentReceiptAttached && styles.uploadEquipTextDone,
+                            ]}
+                          >
+                            {equipmentReceiptAttached
+                              ? 'Item Image Uploaded'
+                              : uploadingEquipmentImage
+                              ? 'Uploading...'
+                              : 'Upload Item Image'}
                           </Text>
-                          <Text style={styles.equipmentBodyCell}>{item.quantity}</Text>
-                        </View>
-                      ))}
-                    </View>
-                    <View style={styles.taskPhotoRow}>
-                      {equipmentPhotos.map((uri, index) => (
-                        <View key={`equipment-photo-${index}`} style={styles.taskPhotoBox}>
-                          {uri ? (
-                            <>
-                              <Image source={{uri}} style={styles.taskPhotoPreview} resizeMode="cover" />
-                              <TouchableOpacity
-                                activeOpacity={0.8}
-                                onPress={() => removeEquipmentPhoto(index)}
-                                style={styles.taskPhotoRemove}>
-                                <Icon name="X" size={14} color="#FFFFFF" />
-                              </TouchableOpacity>
-                            </>
-                          ) : (
-                            <TouchableOpacity
-                              activeOpacity={0.8}
-                              onPress={() => openCameraForSlot(index, 'equipment')}
-                              style={styles.taskPhotoAdd}>
-                              <Icon name="Plus" size={18} color={BLUE} />
-                            </TouchableOpacity>
-                          )}
-                        </View>
-                      ))}
-                    </View>
-                    <TouchableOpacity
-                      activeOpacity={0.82}
-                      onPress={uploadEquipmentImages}
-                      disabled={!canUploadEquipmentImages}
-                      style={[
-                        styles.uploadEquipButton,
-                        !canUploadEquipmentImages && styles.uploadEquipButtonDisabled,
-                        equipmentReceiptAttached && styles.uploadEquipButtonDone,
-                      ]}
-                    >
-                      <Icon
-                        name={equipmentReceiptAttached ? 'CheckCircle2' : 'ImageUp'}
-                        size={18}
-                        color={equipmentReceiptAttached ? GREEN : BLUE}
-                      />
-                      <Text
-                        style={[
-                          styles.uploadEquipText,
-                          equipmentReceiptAttached && styles.uploadEquipTextDone,
-                        ]}
-                      >
-                        {equipmentReceiptAttached
-                          ? 'Item Image Uploaded'
-                          : uploadingEquipmentImage
-                          ? 'Uploading...'
-                          : 'Upload Item Image'}
-                      </Text>
-                    </TouchableOpacity>
+                        </TouchableOpacity>
+                      </>
+                    )}
+
                     <TouchableOpacity
                       activeOpacity={0.8}
                       disabled={equipmentDone}
@@ -1507,6 +1802,212 @@ function TaskDetailModal({
               </Modal>
             </>
           ) : null}
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+const STEP_TYPE_CONFIG: Record<string, { icon: string; color: string; label: string; bg: string }> = {
+  logistics:   { icon: 'Truck',         color: BLUE,       label: 'Logistics',   bg: BLUE_SOFT   },
+  inventory:   { icon: 'Package',       color: ORANGE_TEXT, label: 'Inventory',   bg: '#FFF4EE'   },
+  cultivation: { icon: 'Sprout',        color: GREEN,       label: 'Cultivation', bg: GREEN_SOFT  },
+  inspection:  { icon: 'ClipboardCheck',color: '#8B5CF6',  label: 'Inspection',  bg: '#F5F3FF'   },
+  others:      { icon: 'FileText',      color: MUTED,       label: 'Others',      bg: '#F1F5F9'   },
+};
+
+function OnDemandTaskModal({
+  task,
+  onClose,
+  onStepOpen,
+}: {
+  task: Task | null;
+  onClose: () => void;
+  onStepOpen: (stepKey: string) => void;
+}) {
+  const [stepStatuses, setStepStatuses] = useState<Record<string, 'pending' | 'completed'>>({});
+
+  useEffect(() => {
+    setStepStatuses({});
+  }, [task?.taskId]);
+
+  if (!task?.onDemandSteps) { return null; }
+
+  const sortedSteps = Object.entries(task.onDemandSteps).sort(([a], [b]) => {
+    const numA = parseInt(a.replace('step_', ''), 10);
+    const numB = parseInt(b.replace('step_', ''), 10);
+    return numA - numB;
+  });
+
+  const activeStepKey = sortedSteps.find(
+    ([key, step]) => (stepStatuses[key] ?? step.status) === 'pending',
+  )?.[0];
+
+  const completedCount = sortedSteps.filter(
+    ([key, step]) => (stepStatuses[key] ?? step.status) === 'completed',
+  ).length;
+
+
+  return (
+    <Modal animationType="fade" transparent visible={!!task} onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.taskModal}>
+          <ScrollView
+            style={styles.modalScroll}
+            contentContainerStyle={styles.modalScrollContent}
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.sheetHandle} />
+
+            {/* Header */}
+            <View style={styles.modalHeader}>
+              <View style={[styles.modalTaskIcon, { backgroundColor: '#FFF4EE' }]}>
+                <Icon name="Zap" size={28} color={ORANGE_TEXT} />
+              </View>
+              <View style={styles.modalTitleBlock}>
+                <Text style={styles.modalTitle}>{task.title || 'On Demand Task'}</Text>
+                <View style={styles.taskTagRow}>
+                  <View style={[styles.fieldTag, { backgroundColor: '#FFF4EE', borderColor: '#FED7AA' }]}>
+                    <Text style={[styles.fieldTagText, { color: ORANGE_TEXT }]}>On Demand</Text>
+                  </View>
+                </View>
+              </View>
+              <TouchableOpacity activeOpacity={0.75} onPress={onClose} style={styles.modalClose}>
+                <Icon name="X" size={20} color={INK} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Task meta */}
+            <View style={styles.taskInfoBox}>
+              <View style={styles.taskInfoRow}>
+                <Text style={styles.taskInfoKey}>Farm ID</Text>
+                <Text style={styles.taskInfoValue}>{task.farmId}</Text>
+              </View>
+              <View style={styles.taskInfoRow}>
+                <Text style={styles.taskInfoKey}>Farmer</Text>
+                <Text style={styles.taskInfoValue}>{task.farmerName}</Text>
+              </View>
+              <View style={styles.taskInfoRow}>
+                <Text style={styles.taskInfoKey}>Location</Text>
+                <Text style={styles.taskInfoValue}>{task.location}</Text>
+              </View>
+            </View>
+
+            {/* Progress */}
+            <View style={styles.odProgressRow}>
+              <Text style={styles.odProgressLabel}>
+                {completedCount} of {sortedSteps.length} steps completed
+              </Text>
+              <View style={styles.odProgressTrack}>
+                <View
+                  style={[
+                    styles.odProgressFill,
+                    { width: `${Math.round((completedCount / sortedSteps.length) * 100)}%` as any },
+                  ]}
+                />
+              </View>
+            </View>
+
+            {/* Steps */}
+            {sortedSteps.map(([key, step], index) => {
+              const status = stepStatuses[key] ?? step.status;
+              const isDone = status === 'completed';
+              const isActive = key === activeStepKey;
+              const cfg = STEP_TYPE_CONFIG[step.type] ?? STEP_TYPE_CONFIG.others;
+              const isLast = index === sortedSteps.length - 1;
+
+              return (
+                <View key={key} style={styles.odStepRow}>
+                  {/* Left: number + connector */}
+                  <View style={styles.odStepLeft}>
+                    <View style={[
+                      styles.odStepNum,
+                      isDone && styles.odStepNumDone,
+                      isActive && { backgroundColor: cfg.color },
+                    ]}>
+                      {isDone
+                        ? <Icon name="Check" size={12} color="#FFFFFF" />
+                        : <Text style={[styles.odStepNumText, isActive && { color: '#FFFFFF' }]}>{index + 1}</Text>
+                      }
+                    </View>
+                    {!isLast ? (
+                      <View style={[styles.odStepConnector, isDone && styles.odStepConnectorDone]} />
+                    ) : null}
+                  </View>
+
+                  {/* Right: card */}
+                  <View style={[
+                    styles.odStepCard,
+                    isDone && styles.odStepCardDone,
+                    isActive && { borderColor: cfg.color + '60', backgroundColor: cfg.bg },
+                  ]}>
+                    {/* Type pill + status */}
+                    <View style={styles.odStepTitleRow}>
+                      <View style={[styles.odTypePill, { backgroundColor: cfg.color + '18' }]}>
+                        <Icon name={cfg.icon} size={12} color={cfg.color} />
+                        <Text style={[styles.odTypePillText, { color: cfg.color }]}>{cfg.label}</Text>
+                      </View>
+                      <View style={[
+                        styles.odStatusPill,
+                        isDone ? styles.odStatusDone : isActive ? styles.odStatusActive : styles.odStatusPending,
+                      ]}>
+                        <Text style={[
+                          styles.odStatusText,
+                          isDone ? styles.odStatusDoneText : isActive ? { color: cfg.color } : styles.odStatusPendingText,
+                        ]}>
+                          {isDone ? 'Done' : isActive ? 'In Progress' : 'Pending'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Step data */}
+                    {step.data.map((item, di) => (
+                      <View key={di} style={styles.odDataRow}>
+                        {step.type === 'logistics' ? (
+                          <>
+                            <Icon name="Truck" size={13} color={MUTED} />
+                            <Text style={styles.odDataText}>{item.vehicle_number || '-'}</Text>
+                          </>
+                        ) : step.type === 'inventory' ? (
+                          <>
+                            <Icon name="Package" size={13} color={MUTED} />
+                            <Text style={styles.odDataText}>{item.item_name || '-'}</Text>
+                            <Text style={styles.odDataMeta}>{item.quantity} {item.unit}</Text>
+                          </>
+                        ) : (
+                          <>
+                            <Icon name="AlignLeft" size={13} color={MUTED} />
+                            <Text style={styles.odDataText}>{item.description || '-'}</Text>
+                          </>
+                        )}
+                      </View>
+                    ))}
+
+                    {/* Open step popup for the active step */}
+                    {isActive ? (
+                      <TouchableOpacity
+                        activeOpacity={0.82}
+                        onPress={() => onStepOpen(key)}
+                        style={[styles.odCompleteBtn, { backgroundColor: cfg.color }]}
+                      >
+                        <Icon name="ArrowRight" size={15} color="#FFFFFF" />
+                        <Text style={styles.odCompleteBtnText}>View & Complete</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+
+            {completedCount === sortedSteps.length ? (
+              <View style={styles.odAllDoneBox}>
+                <Icon name="CheckCircle2" size={22} color={GREEN} />
+                <Text style={styles.odAllDoneText}>All steps completed</Text>
+              </View>
+            ) : null}
+
+          </ScrollView>
+
         </View>
       </View>
     </Modal>
@@ -1917,6 +2418,27 @@ function getTaskCount(groups: TaskGroup[]) {
   return groups.reduce((total, group) => total + group.tasks.length, 0);
 }
 
+const MONTH_MAP: Record<string, number> = {
+  jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+  jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+};
+
+function parseDueDate(dueTime: string): Date | null {
+  if (!dueTime || dueTime === '-') { return null; }
+  // ISO format: "2026-10-07"
+  if (/^\d{4}-\d{2}-\d{2}/.test(dueTime)) {
+    const d = new Date(dueTime);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // "20 May 2025" or "20 May 2025, 05:00 PM"
+  const parts = dueTime.trim().split(/[\s,]+/);
+  const day = parseInt(parts[0], 10);
+  const month = MONTH_MAP[(parts[1] ?? '').toLowerCase().slice(0, 3)];
+  const year = parseInt(parts[2], 10);
+  if (isNaN(day) || month === undefined || isNaN(year)) { return null; }
+  return new Date(year, month, day);
+}
+
 function flattenGroups(groups: TaskGroup[]) {
   return groups.flatMap(group => group.tasks);
 }
@@ -1951,6 +2473,7 @@ function mapApiTasksToUi(tasks: ApiTask[], farmDetails: FarmDetail[]): Task[] {
       equipment: (task.equipment ?? []).map(item => ({
         equipment_name: item.equipment_name,
         quantity: item.quantity,
+        vendor_id: item.vendor_id,
       })),
       description: '',
       assignedTo: 'Field Manager',
@@ -1958,8 +2481,38 @@ function mapApiTasksToUi(tasks: ApiTask[], farmDetails: FarmDetail[]): Task[] {
       status,
       allocation: 'Field Team',
       subTasks: [],
+      onDemandSteps: task.steps,
     };
   });
+}
+
+function formatOnDemandDate(isoString: string): string {
+  try {
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) { return isoString; }
+    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  } catch {
+    return isoString;
+  }
+}
+
+async function fetchVendorDetails(vendorId: string): Promise<VendorDetail | null> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/field_manager/get_vendor_details`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({vendor_id: vendorId}),
+    });
+    const data = await res.json();
+    const details = data?.vendor_details?.vendor_details;
+    if (!res.ok || !details) { return null; }
+    return {
+      vendor_name: details.vendor_name,
+      vendor_contact: details.vendor_contact,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function normalizeTaskStatus(status?: string) {
@@ -2257,6 +2810,38 @@ const COMPLETED_TASKS: Task[] = [
     allocation: 'No allocation needed. Task has already been completed.',
   },
 ];
+
+const DEMO_ON_DEMAND_TASK: Task = {
+  taskId: 'OD-DEMO-001',
+  title: 'Urea Delivery',
+  farmId: 'FM-10035',
+  location: 'Bori, Durg',
+  farmerName: 'Mahesh Sahu',
+  dueTime: '2026-06-05',
+  assignedAcres: '5',
+  description: 'On demand urea delivery task assigned by admin.',
+  assignedTo: 'Field Manager',
+  priority: 'High Priority',
+  status: 'Assigned',
+  allocation: 'On Demand',
+  onDemandSteps: {
+    step_1: {
+      type: 'inventory',
+      data: [{ item_name: 'Madhur Urea', unit: 'KGS', quantity: 4, equipment_id: 'product_f22cda7b' }],
+      status: 'pending',
+    },
+    step_2: {
+      type: 'logistics',
+      data: [{ vehicle_id: '6280ec13-960d-4af1-bdfc-568e49e11ef2', vehicle_number: 'CG07B1121' }],
+      status: 'pending',
+    },
+    step_3: {
+      type: 'others',
+      data: [{ description: 'Urea load karwa dena truck me' }],
+      status: 'pending',
+    },
+  },
+};
 
 const TEAM_MEMBERS = ['Rahul', 'Amit', 'Priya', 'Sandeep'];
 
@@ -2564,6 +3149,39 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
   },
+  filterBar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 14,
+    marginTop: 4,
+  },
+  filterLabel: {
+    color: MUTED,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  filterChip: {
+    borderColor: '#DDE3EC',
+    borderRadius: 20,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  filterChipActive: {
+    backgroundColor: BLUE,
+    borderColor: BLUE,
+  },
+  filterChipText: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  filterChipTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
   group: {
     marginBottom: 16,
   },
@@ -2604,6 +3222,221 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     lineHeight: 25,
     marginBottom: 14,
+  },
+  taskCard2: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E6ECF2',
+    marginBottom: 14,
+    overflow: 'hidden',
+    shadowColor: '#182033',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.07,
+    shadowRadius: 16,
+    elevation: 3,
+  },
+  landStrip: {
+    backgroundColor: '#1B4D2E',
+    height: 110,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  fieldRowLine: {
+    backgroundColor: '#2E7D4F',
+    height: 1,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+  },
+  landStripOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  landStripContent: {
+    alignItems: 'center',
+    bottom: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    left: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  farmIdBadge: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderRadius: 6,
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  farmIdBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  acresBadge: {
+    alignItems: 'center',
+    backgroundColor: '#EFFAF2',
+    borderRadius: 6,
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  acresBadgeText: {
+    color: GREEN,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  taskCardBody: {
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 10,
+  },
+  taskCardTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    gap: 8,
+  },
+  taskCardActivity: {
+    color: INK,
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '900',
+    lineHeight: 21,
+  },
+  taskPriorityPill: {
+    borderRadius: 6,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  taskPriorityText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  assignSelector: {
+    alignItems: 'center',
+    borderRadius: 7,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 4,
+    maxWidth: 120,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  assignSelectorText: {
+    flex: 1,
+    fontSize: 10,
+    fontWeight: '700',
+    minWidth: 0,
+  },
+  assignDropdown: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#DDE3EC',
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 8,
+    marginTop: 2,
+    overflow: 'hidden',
+  },
+  assignDropdownItem: {
+    alignItems: 'center',
+    borderBottomColor: '#EEF1F5',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  assignDropdownName: {
+    color: INK,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  taskCardInfoRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    marginBottom: 6,
+  },
+  taskCardInfoText: {
+    color: MUTED,
+    flex: 1,
+    fontSize: 12,
+    minWidth: 0,
+  },
+  infoDot: {
+    backgroundColor: '#C8D0DC',
+    borderRadius: 2,
+    height: 4,
+    width: 4,
+  },
+  taskCardDueRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 5,
+  },
+  taskCardDueText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  taskCardDivider: {
+    backgroundColor: '#EEF1F5',
+    height: 1,
+    marginHorizontal: 14,
+  },
+  taskActionsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 6,
+  },
+  taskActionChip: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  taskActionChipDone: {
+    backgroundColor: '#F0FBF4',
+    borderColor: '#BDEBCB',
+  },
+  taskActionChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  completeTaskBtn: {
+    alignItems: 'center',
+    borderRadius: 10,
+    borderWidth: 1.5,
+    flexDirection: 'row',
+    gap: 7,
+    justifyContent: 'center',
+    marginHorizontal: 14,
+    marginBottom: 12,
+    paddingVertical: 10,
+  },
+  completeTaskBtnDone: {
+    backgroundColor: '#F0FBF4',
+    borderColor: '#BDEBCB',
+  },
+  completeTaskBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
   },
   detailRow: {
     alignItems: 'center',
@@ -3955,4 +4788,213 @@ const styles = StyleSheet.create({
   vdRowBorder: { borderBottomWidth: 1, borderBottomColor: CARD_BORDER },
   vdLabel: { color: MUTED, fontSize: 12, fontWeight: '600', width: 64 },
   vdValue: { color: INK, fontSize: 13, fontWeight: '700', flex: 1 },
+  odCard: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#FED7AA',
+    borderRadius: 14,
+    paddingTop: 14,
+    paddingHorizontal: 14,
+    paddingBottom: 10,
+    marginBottom: 12,
+    gap: 10,
+  },
+  odCardHeader: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 10,
+  },
+  odCardIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#FFF4EE',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  odCardTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  odCardTitle: {
+    color: INK,
+    fontSize: 15,
+    fontWeight: '800' as const,
+  },
+  odCardSub: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '500' as const,
+    marginTop: 2,
+  },
+  odCardBadge: {
+    backgroundColor: '#FFF4EE',
+    borderColor: '#FED7AA',
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  odCardBadgeText: {
+    color: ORANGE_TEXT,
+    fontSize: 10,
+    fontWeight: '800' as const,
+  },
+  odCardMeta: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 5,
+  },
+  odCardDateText: {
+    color: MUTED,
+    fontSize: 12,
+    fontWeight: '500' as const,
+    flex: 1,
+  },
+  odCardCountPill: {
+    backgroundColor: '#F1F5F9',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  odCardStepCount: {
+    color: MUTED,
+    fontSize: 11,
+    fontWeight: '700' as const,
+  },
+  odFlowScroll: {
+    paddingVertical: 6,
+    paddingBottom: 4,
+  },
+  odFlowItem: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+  },
+  odFlowNode: {
+    width: 138,
+    borderWidth: 1.5,
+    borderRadius: 14,
+    overflow: 'hidden' as const,
+    gap: 0,
+  },
+  odFlowNodeTop: {
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+    gap: 5,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+  },
+  odFlowNodeType: {
+    fontSize: 13,
+    fontWeight: '800' as const,
+    letterSpacing: 0.2,
+  },
+  odFlowStatus: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 5,
+    marginHorizontal: 10,
+    marginBottom: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 7,
+  },
+  odFlowDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  odFlowStatusText: {
+    fontSize: 11,
+    fontWeight: '700' as const,
+  },
+  odFlowConnector: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    paddingHorizontal: 6,
+  },
+  odFlowLine: {
+    width: 18,
+    height: 2,
+  },
+  onDemandBadge: {
+    flexDirection: 'row' as const, alignItems: 'center' as const, gap: 3,
+    backgroundColor: '#FFF4EE', borderColor: '#FED7AA', borderWidth: 1,
+    borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2,
+  },
+  onDemandBadgeText: { color: ORANGE_TEXT, fontSize: 9, fontWeight: '800' as const },
+  odProgressRow: { marginBottom: 20, gap: 8 },
+  odProgressLabel: { color: MUTED, fontSize: 13, fontWeight: '600' as const },
+  odProgressTrack: { height: 6, backgroundColor: '#E6ECF2', borderRadius: 3 },
+  odProgressFill: { height: 6, backgroundColor: GREEN, borderRadius: 3 },
+  odStepRow: { flexDirection: 'row' as const, marginBottom: 4, alignItems: 'flex-start' as const },
+  odStepLeft: { alignItems: 'center' as const, width: 32, paddingTop: 2 },
+  odStepNum: {
+    width: 26, height: 26, borderRadius: 13,
+    backgroundColor: '#E6ECF2',
+    alignItems: 'center' as const, justifyContent: 'center' as const,
+  },
+  odStepNumDone: { backgroundColor: GREEN },
+  odStepNumText: { color: MUTED, fontSize: 12, fontWeight: '800' as const },
+  odStepConnector: { width: 2, flex: 1, marginTop: 4, backgroundColor: CARD_BORDER, minHeight: 24 },
+  odStepConnectorDone: { backgroundColor: GREEN },
+  odStepCard: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    padding: 14,
+    marginBottom: 10,
+    gap: 10,
+  },
+  odStepCardDone: { backgroundColor: GREEN_SOFT, borderColor: GREEN_BORDER },
+  odStepTitleRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8 },
+  odTypePill: {
+    flexDirection: 'row' as const, alignItems: 'center' as const,
+    gap: 5, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6,
+  },
+  odTypePillText: { fontSize: 12, fontWeight: '700' as const },
+  odStatusPill: { marginLeft: 'auto' as const, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  odStatusDone: { backgroundColor: GREEN_SOFT },
+  odStatusActive: { backgroundColor: BLUE_SOFT },
+  odStatusPending: { backgroundColor: '#F1F5F9' },
+  odStatusText: { fontSize: 11, fontWeight: '700' as const },
+  odStatusDoneText: { color: GREEN },
+  odStatusPendingText: { color: MUTED },
+  odDataRow: { flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8 },
+  odDataText: { color: INK, fontSize: 13, fontWeight: '600' as const, flex: 1 },
+  odDataMeta: { color: MUTED, fontSize: 12, fontWeight: '600' as const },
+  odCompleteBtn: {
+    flexDirection: 'row' as const, alignItems: 'center' as const,
+    justifyContent: 'center' as const, gap: 7,
+    borderRadius: 9, paddingVertical: 10, marginTop: 2,
+  },
+  odCompleteBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' as const },
+  odAllDoneBox: {
+    flexDirection: 'row' as const, alignItems: 'center' as const,
+    justifyContent: 'center' as const, gap: 8,
+    backgroundColor: GREEN_SOFT, borderColor: GREEN_BORDER, borderWidth: 1,
+    borderRadius: 10, paddingVertical: 14, marginTop: 8,
+  },
+  odAllDoneText: { color: GREEN, fontSize: 14, fontWeight: '800' as const },
+  vendorInfoCard: {
+    backgroundColor: '#F8FAFC',
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    gap: 10,
+    marginBottom: 12,
+    padding: 14,
+  },
+  vendorInfoRow: {
+    alignItems: 'center' as const,
+    flexDirection: 'row' as const,
+    gap: 8,
+  },
+  vendorInfoText: {
+    color: INK,
+    fontSize: 14,
+    fontWeight: '600' as const,
+  },
 });
