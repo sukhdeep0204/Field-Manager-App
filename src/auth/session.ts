@@ -21,6 +21,13 @@ export type FarmAccess = {
   count: number;
 };
 
+export type LandPlot = {
+  plot_name: string;
+  plot_area: number;
+  plot_coordinates: number[][];
+  created_at?: string;
+};
+
 export type FarmDetail = {
   farm: {
     created_at: string;
@@ -43,6 +50,7 @@ export type FarmDetail = {
     priority: number;
     block_id: string;
     crop_type: string;
+    land_plots?: LandPlot[];
   };
 };
 

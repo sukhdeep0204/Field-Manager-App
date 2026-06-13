@@ -40,6 +40,12 @@ const BLUE_BORDER = '#93C5FD';
 const ORANGE_TEXT = '#EA580C';
 const CARD_BORDER = '#E6ECF2';
 
+type PlotItem = {
+  plot_id: string;
+  plot_name: string;
+  plot_area: number;
+};
+
 type Task = {
   taskId?: string;
   calanderId?: string;
@@ -49,6 +55,7 @@ type Task = {
   farmerName: string;
   dueTime: string;
   assignedAcres?: string;
+  plots?: PlotItem[];
   vehicles?: Array<{
     vehicle_id?: string;
     vendor_id?: string;
@@ -62,6 +69,8 @@ type Task = {
   equipmentOtp?: string;
   transportCoordinationStatus?: string;
   equipmentCoordinationStatus?: string;
+  isOverdue?: boolean;
+  overdueFromDate?: string;
   description: string;
   assignedTo: string;
   priority: string;
@@ -74,29 +83,36 @@ type Task = {
 type ApiTask = {
   equipment_otp?: string;
   calander_id?: string;
+  calendar_id?: string;
   trasport_coordination_status?: string;
   transport_coordination_status?: string;
   equipment_coordination_status?: string;
   task_id: string;
   feild_id: string[];
   farmer_name: string;
+  plot?: PlotItem[];
+  plots?: PlotItem[];
+  activity?: string;
+  overdue_carry?: boolean;
+  overdue_from_date?: string;
   assigned_acres: Array<{
     date: string;
     activity: string;
     assigned_acres: number;
     farm_id: string;
+    plots?: PlotItem[];
   }>;
   status: {
     feild_manager_status: string;
-    farmer_status: string;
+    farmer_status?: string;
     supervisor_status: string;
   };
-  vehicles: Array<{
+  vehicles?: Array<{
     vehicle_id?: string;
     vendor_id?: string;
     vehicle_number: string;
   }>;
-  equipment: Array<{
+  equipment?: Array<{
     equipment_name: string;
     equipment_id?: string;
     vendor_id?: string;
@@ -107,19 +123,32 @@ type ApiTask = {
 
 type ApiFieldVisitTask = {
   task_id: string;
+  calendar_id: string;
+  calander_id?: string;
   feild_id: string[];
+  date: string;
+  created_at: string;
+  activity?: string;
+  overdue_carry?: boolean;
+  overdue_from_date?: string;
+  overdue_from_task?: string;
   assigned_acres: Array<{
     date: string;
     activity: string;
     assigned_acres: number;
     farm_id: string;
+    calander_id?: string;
   }>;
   allocation_schema: Array<{
+    date?: string;
     allocated_acres: number;
     farm_id: string;
     completed_acres: number;
   }>;
-  created_at: string;
+  status?: {
+    feild_manager_status: string;
+    supervisor_status: string;
+  };
 };
 
 type ApiOnDemandTask = {
@@ -693,6 +722,14 @@ function TaskCard({
 
       {/* ── Task Info ── */}
       <View style={styles.taskCardBody}>
+        {task.isOverdue ? (
+          <View style={styles.overdueBanner}>
+            <Icon name="AlertCircle" size={12} color={RED} />
+            <Text style={styles.overdueBannerText}>
+              Overdue{task.overdueFromDate ? ` · carried from ${task.overdueFromDate}` : ''}
+            </Text>
+          </View>
+        ) : null}
         <View style={styles.taskCardTitleRow}>
           <Text style={styles.taskCardActivity} numberOfLines={1}>
             {translateTaskText(task.title, language)}
@@ -814,6 +851,7 @@ function TaskDetailModal({
   const [equipmentImageUrl, setEquipmentImageUrl] = useState('');
   const [uploadingEquipmentImage, setUploadingEquipmentImage] = useState(false);
   const [completedAcres, setCompletedAcres] = useState('');
+  const [completedPlotIds, setCompletedPlotIds] = useState<string[]>([]);
   const [taskPhotos, setTaskPhotos] = useState<Array<string | null>>([
     null,
     null,
@@ -1001,11 +1039,15 @@ function TaskDetailModal({
       Alert.alert('Task', 'Task ID missing.');
       return;
     }
-    const completedAcresValue = Number(completedAcres);
-    if (!Number.isFinite(completedAcresValue)) {
-      Alert.alert('Task', 'Please enter a valid completed acres value.');
+    const completedAcresValue = hasPlotsData ? plotCompletedAcres : Number(completedAcres);
+    if (!Number.isFinite(completedAcresValue) || completedAcresValue <= 0) {
+      Alert.alert('Task', hasPlotsData ? 'Please select at least one completed plot.' : 'Please enter a valid completed acres value.');
       return;
     }
+
+    const allPlots = task.plots ?? [];
+    const completedPlots = allPlots.filter(p => completedPlotIds.includes(p.plot_id));
+    const remainingPlots = allPlots.filter(p => !completedPlotIds.includes(p.plot_id));
 
     try {
       setCompletingTask(true);
@@ -1018,6 +1060,9 @@ function TaskDetailModal({
           completed_acres: completedAcresValue,
           status: 'completed',
           calander_id: task.calanderId ?? '',
+          task_type: task.title,
+          completed_plots: completedPlots,
+          remaining_plots: remainingPlots,
         }),
       });
       const data = await response.json();
@@ -1096,6 +1141,7 @@ function TaskDetailModal({
 
   useEffect(() => {
     setCompletedAcres('');
+    setCompletedPlotIds([]);
     setTaskPhotos([null, null, null]);
     setEquipmentPhotos([null]);
     setTaskProgressImageUrls([]);
@@ -1123,7 +1169,11 @@ function TaskDetailModal({
 
   const hasThreePhotos = taskPhotos.filter(Boolean).length === 3;
   const hasEquipmentPhoto = equipmentPhotos.filter(Boolean).length === 1;
-  const hasCompletedAcres = completedAcres.trim().length > 0;
+  const hasPlotsData = Boolean(task?.plots && task.plots.length > 0);
+  const plotCompletedAcres = hasPlotsData
+    ? (task?.plots ?? []).filter(p => completedPlotIds.includes(p.plot_id)).reduce((sum, p) => sum + p.plot_area, 0)
+    : 0;
+  const hasCompletedAcres = hasPlotsData ? completedPlotIds.length > 0 : completedAcres.trim().length > 0;
   const canUploadTaskImages = hasThreePhotos && !uploadingTaskImages;
   const canUploadEquipmentImages = hasEquipmentPhoto && !uploadingEquipmentImage;
   const canCompleteTask =
@@ -1696,72 +1746,161 @@ function TaskDetailModal({
                     <Text style={[styles.detailGridLabel, styles.acresLabelBold]}>Allocated Acres</Text>
                     <Text style={styles.detailGridValue}>{task.assignedAcres ?? '-'}</Text>
                   </View>
-                  <View style={styles.acresRow}>
-                    <Text style={styles.detailGridLabel}>Completed Acres</Text>
-                    <View style={styles.completedAcresWrap}>
-                      <TextInput
-                        value={completedAcres}
-                        onChangeText={setCompletedAcres}
-                        placeholder="Enter"
-                        keyboardType="decimal-pad"
-                        placeholderTextColor="#94A3B8"
-                        style={styles.completedAcresInput}
-                      />
-                    </View>
-                  </View>
 
-                  <Text style={styles.cleanSectionTitle}>Attach photos</Text>
-                  <View style={styles.taskPhotoRow}>
-                    {taskPhotos.map((uri, index) => (
-                      <View key={`task-photo-${index}`} style={styles.taskPhotoBox}>
-                        {uri ? (
-                          <>
-                            <Image source={{uri}} style={styles.taskPhotoPreview} resizeMode="cover" />
-                            <TouchableOpacity
-                              activeOpacity={0.8}
-                              onPress={() => removeTaskPhoto(index)}
-                              style={styles.taskPhotoRemove}>
-                              <Icon name="X" size={14} color="#FFFFFF" />
-                            </TouchableOpacity>
-                          </>
-                        ) : (
-                          <TouchableOpacity
-                            activeOpacity={0.8}
-                            onPress={() => openCameraForSlot(index, 'task')}
-                            style={styles.taskPhotoAdd}>
-                            <Icon name="Plus" size={18} color={BLUE} />
-                          </TouchableOpacity>
-                        )}
+                  {hasPlotsData ? (
+                    <View style={styles.plotSection}>
+                      <View style={styles.plotSectionHeader}>
+                        <Icon name="LayoutGrid" size={14} color={BLUE} />
+                        <Text style={styles.plotSectionTitle}>Plot Completion (Priority Order)</Text>
+                        <View style={styles.plotCountBadge}>
+                          <Text style={styles.plotCountText}>
+                            {completedPlotIds.length}/{task.plots!.length}
+                          </Text>
+                        </View>
                       </View>
-                    ))}
-                  </View>
-                    <TouchableOpacity
-                      activeOpacity={0.82}
-                      onPress={uploadTaskImages}
-                      disabled={!canUploadTaskImages}
-                      style={[
-                        styles.uploadTaskImagesButton,
-                        !canUploadTaskImages && styles.uploadTaskImagesButtonDisabled,
-                      ]}>
-                    <Icon name="Upload" size={17} color="#FFFFFF" />
-                    <Text style={styles.uploadTaskImagesText}>
-                      {uploadingTaskImages ? 'Uploading...' : 'Upload'}
-                    </Text>
-                  </TouchableOpacity>
+                      {task.plots!.map((plot, index) => {
+                        const isDone = completedPlotIds.includes(plot.plot_id);
+                        const prevDone = index === 0 || completedPlotIds.includes(task.plots![index - 1].plot_id);
+                        const isActive = !isDone && prevDone;
+                        const isLocked = !isDone && !prevDone;
+                        return (
+                          <TouchableOpacity
+                            key={plot.plot_id}
+                            activeOpacity={isLocked || isDone ? 1 : 0.78}
+                            disabled={isLocked || isDone}
+                            onPress={() => {
+                              if (isActive) {
+                                setCompletedPlotIds(prev => [...prev, plot.plot_id]);
+                              }
+                            }}
+                            style={[
+                              styles.plotRow,
+                              isDone && styles.plotRowDone,
+                              isActive && styles.plotRowActive,
+                              isLocked && styles.plotRowLocked,
+                            ]}
+                          >
+                            <View style={[
+                              styles.plotPriorityBadge,
+                              isDone && styles.plotPriorityBadgeDone,
+                              isActive && styles.plotPriorityBadgeActive,
+                            ]}>
+                              <Text style={[
+                                styles.plotPriorityText,
+                                isDone && styles.plotPriorityTextDone,
+                                isActive && styles.plotPriorityTextActive,
+                              ]}>
+                                {isDone ? '✓' : `P${index + 1}`}
+                              </Text>
+                            </View>
+                            <View style={styles.plotInfo}>
+                              <Text style={[styles.plotName, isLocked && styles.plotNameLocked]}>
+                                {plot.plot_name}
+                              </Text>
+                              <Text style={[styles.plotArea, isLocked && styles.plotAreaLocked]}>
+                                {plot.plot_area} acres
+                              </Text>
+                            </View>
+                            {isDone ? (
+                              <Icon name="CheckCircle2" size={20} color={GREEN} />
+                            ) : isActive ? (
+                              <View style={styles.plotCompleteTap}>
+                                <Text style={styles.plotCompleteTapText}>Tap to complete</Text>
+                              </View>
+                            ) : (
+                              <Icon name="Lock" size={16} color="#B0BDC8" />
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                      {completedPlotIds.length > 0 ? (
+                        <View style={styles.plotAcresSummary}>
+                          <Icon name="Sprout" size={13} color={GREEN} />
+                          <Text style={styles.plotAcresSummaryText}>
+                            Completed: {plotCompletedAcres.toFixed(1)} acres
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : (
+                    <View style={styles.acresRow}>
+                      <Text style={styles.detailGridLabel}>Completed Acres</Text>
+                      <View style={styles.completedAcresWrap}>
+                        <TextInput
+                          value={completedAcres}
+                          onChangeText={setCompletedAcres}
+                          placeholder="Enter"
+                          keyboardType="decimal-pad"
+                          placeholderTextColor="#94A3B8"
+                          style={styles.completedAcresInput}
+                        />
+                      </View>
+                    </View>
+                  )}
 
-                  <TouchableOpacity
-                    activeOpacity={0.82}
-                    onPress={completeTask}
-                    disabled={!canCompleteTask}
-                    style={[
-                      styles.taskCompleteButton,
-                      !canCompleteTask && styles.taskCompleteButtonDisabled,
-                      taskMarkedCompleted && styles.taskCompleteButtonDone,
-                    ]}>
-                    <Text style={styles.taskCompleteButtonText}>
-                      {completingTask ? 'Completing...' : 'Task Completed'}
-                    </Text>
-                  </TouchableOpacity>
+                  {(!hasPlotsData || completedPlotIds.length > 0) ? (
+                    <>
+                      <Text style={styles.cleanSectionTitle}>Attach photos</Text>
+                      <View style={styles.taskPhotoRow}>
+                        {taskPhotos.map((uri, index) => (
+                          <View key={`task-photo-${index}`} style={styles.taskPhotoBox}>
+                            {uri ? (
+                              <>
+                                <Image source={{uri}} style={styles.taskPhotoPreview} resizeMode="cover" />
+                                <TouchableOpacity
+                                  activeOpacity={0.8}
+                                  onPress={() => removeTaskPhoto(index)}
+                                  style={styles.taskPhotoRemove}>
+                                  <Icon name="X" size={14} color="#FFFFFF" />
+                                </TouchableOpacity>
+                              </>
+                            ) : (
+                              <TouchableOpacity
+                                activeOpacity={0.8}
+                                onPress={() => openCameraForSlot(index, 'task')}
+                                style={styles.taskPhotoAdd}>
+                                <Icon name="Plus" size={18} color={BLUE} />
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                        ))}
+                      </View>
+                      <TouchableOpacity
+                        activeOpacity={0.82}
+                        onPress={uploadTaskImages}
+                        disabled={!canUploadTaskImages}
+                        style={[
+                          styles.uploadTaskImagesButton,
+                          !canUploadTaskImages && styles.uploadTaskImagesButtonDisabled,
+                        ]}>
+                        <Icon name="Upload" size={17} color="#FFFFFF" />
+                        <Text style={styles.uploadTaskImagesText}>
+                          {uploadingTaskImages ? 'Uploading...' : 'Upload'}
+                        </Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        activeOpacity={0.82}
+                        onPress={completeTask}
+                        disabled={!canCompleteTask}
+                        style={[
+                          styles.taskCompleteButton,
+                          !canCompleteTask && styles.taskCompleteButtonDisabled,
+                          taskMarkedCompleted && styles.taskCompleteButtonDone,
+                        ]}>
+                        <Text style={styles.taskCompleteButtonText}>
+                          {completingTask ? 'Completing...' : 'Task Completed'}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <View style={styles.plotUploadHint}>
+                      <Icon name="Info" size={14} color={MUTED} />
+                      <Text style={styles.plotUploadHintText}>
+                        Mark at least one plot as completed to upload photos and submit the task.
+                      </Text>
+                    </View>
+                  )}
                 </View>
               </ScrollView>
 
@@ -2456,15 +2595,21 @@ function mapApiTasksToUi(tasks: ApiTask[], farmDetails: FarmDetail[]): Task[] {
     const farmId = firstAssigned?.farm_id || task.feild_id?.[0] || '-';
     const status = normalizeTaskStatus(task.status?.feild_manager_status);
 
+    const isOverdue = (task.status?.feild_manager_status || '').toLowerCase() === 'overdue';
+    const resolvedPlots = task.plots ?? task.plot ?? firstAssigned?.plots ?? [];
+
     return {
       taskId: task.task_id,
-      calanderId: task.calander_id ?? '',
-      title: firstAssigned?.activity || 'Task',
+      calanderId: task.calander_id ?? task.calendar_id ?? '',
+      title: task.activity || firstAssigned?.activity || 'Task',
       farmId,
       location: locationByFarmId.get(farmId) || '-',
       farmerName: task.farmer_name || '-',
       dueTime: firstAssigned?.date || '-',
       assignedAcres: `${firstAssigned?.assigned_acres ?? 0}`,
+      plots: resolvedPlots,
+      isOverdue,
+      overdueFromDate: task.overdue_from_date,
       vehicles: task.vehicles ?? [],
       equipmentOtp: task.equipment_otp ?? '',
       transportCoordinationStatus:
@@ -2517,15 +2662,10 @@ async function fetchVendorDetails(vendorId: string): Promise<VendorDetail | null
 
 function normalizeTaskStatus(status?: string) {
   const value = (status || '').toLowerCase();
-  if (value === 'completed') {
-    return 'Completed';
-  }
-  if (value === 'pending') {
-    return 'Pending';
-  }
-  if (value === 'assigned') {
-    return 'Assigned';
-  }
+  if (value === 'completed') { return 'Completed'; }
+  if (value === 'pending') { return 'Pending'; }
+  if (value === 'assigned') { return 'Assigned'; }
+  if (value === 'overdue') { return 'Pending'; }
   return 'Assigned';
 }
 
@@ -3900,6 +4040,167 @@ const styles = StyleSheet.create({
   },
   completedAcresWrap: {
     width: 110,
+  },
+  plotSection: {
+    marginBottom: 12,
+  },
+  plotSectionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 8,
+  },
+  plotSectionTitle: {
+    color: INK,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  plotCountBadge: {
+    backgroundColor: BLUE_SOFT,
+    borderColor: BLUE_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  plotCountText: {
+    color: BLUE,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  plotRow: {
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderColor: CARD_BORDER,
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 6,
+    padding: 10,
+  },
+  plotRowDone: {
+    backgroundColor: GREEN_SOFT,
+    borderColor: GREEN_BORDER,
+  },
+  plotRowActive: {
+    backgroundColor: BLUE_SOFT,
+    borderColor: BLUE_BORDER,
+  },
+  plotRowLocked: {
+    backgroundColor: '#F4F6F8',
+    borderColor: '#E2E8F0',
+    opacity: 0.6,
+  },
+  plotPriorityBadge: {
+    alignItems: 'center',
+    backgroundColor: CARD_BORDER,
+    borderRadius: 16,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  plotPriorityBadgeDone: {
+    backgroundColor: GREEN,
+  },
+  plotPriorityBadgeActive: {
+    backgroundColor: BLUE,
+  },
+  plotPriorityText: {
+    color: MUTED,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  plotPriorityTextDone: {
+    color: '#FFFFFF',
+    fontSize: 14,
+  },
+  plotPriorityTextActive: {
+    color: '#FFFFFF',
+  },
+  plotInfo: {
+    flex: 1,
+  },
+  plotName: {
+    color: INK,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  plotNameLocked: {
+    color: MUTED,
+  },
+  plotArea: {
+    color: MUTED,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  plotAreaLocked: {
+    color: '#B0BDC8',
+  },
+  plotCompleteTap: {
+    backgroundColor: BLUE + '18',
+    borderColor: BLUE_BORDER,
+    borderRadius: 6,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  plotCompleteTapText: {
+    color: BLUE,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  plotAcresSummary: {
+    alignItems: 'center',
+    backgroundColor: GREEN_SOFT,
+    borderColor: GREEN_BORDER,
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  plotAcresSummaryText: {
+    color: GREEN,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  overdueBanner: {
+    alignItems: 'center',
+    backgroundColor: RED_SOFT,
+    borderColor: RED_BORDER,
+    borderRadius: 6,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    marginBottom: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  overdueBannerText: {
+    color: RED,
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  plotUploadHint: {
+    alignItems: 'flex-start',
+    backgroundColor: '#F8FAFC',
+    borderColor: CARD_BORDER,
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+    padding: 12,
+  },
+  plotUploadHintText: {
+    color: MUTED,
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
   },
   taskInfoBox: {
     backgroundColor: '#F8FAFC',

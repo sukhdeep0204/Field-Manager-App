@@ -18,7 +18,7 @@ import {useEffect, useState} from 'react';
 import {useSafeAreaInsets} from 'react-native-safe-area-context';
 import Icon from '../components/Icon';
 import {useLanguage} from '../context/LanguageContext';
-import {loadSession, type FarmDetail, type FarmerDetail} from '../auth/session';
+import {loadSession, type FarmDetail, type FarmerDetail, type LandPlot} from '../auth/session';
 import {API_BASE_URL} from '../config';
 
 let LeafletWebView: any = null;
@@ -175,6 +175,7 @@ type Land = {
   coordinates: string;
   photos: string[];
   landCoordinates?: number[][];
+  landPlots?: LandPlot[];
   landImageUrls?: string[];
   landVideoUrl?: string;
   fieldVisitDate?: string;
@@ -212,7 +213,7 @@ export default function HarvestScreen() {
     if (farmIds.length > 0) {
       try {
         const res = await fetch(
-          `${API_BASE_URL}/admin_all_task/get_all_upcoming_field_visit_tasks`,
+          `${API_BASE_URL}/admin_all_task/get_my_upcoming_field_visit`,
           {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -220,18 +221,42 @@ export default function HarvestScreen() {
           },
         );
         const data = await res.json();
-        if (res.ok && Array.isArray(data)) {
-          const visitMap: Record<string, string> = {};
-          data.forEach((item: {feild_id: string[]; next_visit_date: string}) => {
+        const visits = data?.upcoming_field_visits;
+        if (res.ok && Array.isArray(visits)) {
+          type VisitInfo = {date: string; activity: string; overdueFromDate?: string};
+          const visitMap: Record<string, VisitInfo> = {};
+          visits.forEach((item: {
+            feild_id: string[];
+            date: string;
+            activity?: string;
+            assigned_acres?: Array<{activity: string}>;
+            overdue_carry?: boolean;
+            overdue_from_date?: string;
+            status?: {feild_manager_status: string};
+          }) => {
             const farmId = item.feild_id?.[0];
-            if (farmId && item.next_visit_date) {
-              visitMap[farmId] = item.next_visit_date;
+            if (!farmId || !item.date) { return; }
+            const activity = item.activity ?? item.assigned_acres?.[0]?.activity ?? 'Field Visit';
+            const isOverdue =
+              item.overdue_carry === true ||
+              (item.status?.feild_manager_status ?? '').includes('overdue');
+            if (!visitMap[farmId]) {
+              visitMap[farmId] = {
+                date: item.date,
+                activity,
+                overdueFromDate: isOverdue ? (item.overdue_from_date ?? item.date) : undefined,
+              };
             }
           });
-          baseLands = baseLands.map(land => ({
-            ...land,
-            fieldVisitDate: visitMap[land.id] ?? land.fieldVisitDate,
-          }));
+          baseLands = baseLands.map(land => {
+            const info = visitMap[land.id];
+            if (!info) { return land; }
+            return {
+              ...land,
+              fieldVisitDate: info.overdueFromDate ?? info.date,
+              fieldVisitActivity: info.activity,
+            };
+          });
         }
       } catch {
         // keep existing fieldVisitDate
@@ -720,6 +745,7 @@ function mapFarmDetailsToLands(
         ? farm.land_data.land_media.images.map((_, index) => `Image ${index + 1}`)
         : ['No Images'],
       landCoordinates: coordinates,
+      landPlots: farm.land_plots ?? [],
       landImageUrls: farm.land_data.land_media?.images ?? [],
       landVideoUrl: farm.land_data.land_media?.video ?? '',
     };
@@ -787,6 +813,7 @@ function getLeafletHtml(land: Land) {
         ? [[parsedFromText.lat, parsedFromText.lng]]
         : [];
   const jsonPoints = JSON.stringify(points);
+  const jsonPlots = JSON.stringify(land.landPlots ?? []);
 
   return `<!DOCTYPE html>
 <html>
@@ -795,6 +822,16 @@ function getLeafletHtml(land: Land) {
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; }
+    .plot-label {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      font-size: 11px;
+      font-weight: 700;
+      color: #fff;
+      text-shadow: 0 0 3px #000, 0 0 3px #000;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>
@@ -802,21 +839,47 @@ function getLeafletHtml(land: Land) {
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const points = ${jsonPoints};
+    const plots = ${jsonPlots};
+    const PLOT_COLORS = [
+      '#E53935','#FB8C00','#FDD835','#43A047','#00ACC1',
+      '#1E88E5','#8E24AA','#F06292','#00BFA5','#FF7043'
+    ];
     const fallback = [20.5937, 78.9629];
     const center = points.length ? points[0] : fallback;
-    const map = L.map('map').setView(center, points.length > 1 ? 16 : 17);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; OpenStreetMap'
+    const map = L.map('map', {zoomControl: true}).setView(center, points.length > 1 ? 16 : 17);
+
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 20,
+      attribution: 'Tiles &copy; Esri'
     }).addTo(map);
+
+    const allBounds = [];
 
     if (points.length === 1) {
       L.marker(points[0]).addTo(map);
     } else if (points.length > 1) {
-      const polygon = L.polygon(points, {color: '#058B2D', weight: 2, fillOpacity: 0.2}).addTo(map);
-      map.fitBounds(polygon.getBounds(), {padding: [16, 16]});
+      const farmPoly = L.polygon(points, {color: '#58FF8A', weight: 2.5, fillOpacity: 0.08, dashArray: '6 4'}).addTo(map);
+      allBounds.push(farmPoly.getBounds());
     } else {
       L.marker(fallback).addTo(map);
+    }
+
+    plots.forEach(function(plot, idx) {
+      const coords = plot.plot_coordinates;
+      if (!coords || coords.length < 2) { return; }
+      const color = PLOT_COLORS[idx % PLOT_COLORS.length];
+      const poly = L.polygon(coords, {color: color, weight: 2, fillColor: color, fillOpacity: 0.25}).addTo(map);
+      allBounds.push(poly.getBounds());
+
+      const centLat = coords.reduce(function(s, c) { return s + c[0]; }, 0) / coords.length;
+      const centLng = coords.reduce(function(s, c) { return s + c[1]; }, 0) / coords.length;
+      const icon = L.divIcon({className: 'plot-label', html: plot.plot_name + (plot.plot_area ? ' (' + plot.plot_area + ' ac)' : '')});
+      L.marker([centLat, centLng], {icon: icon, interactive: false}).addTo(map);
+    });
+
+    if (allBounds.length > 0) {
+      const combined = allBounds.reduce(function(b, cur) { return b.extend(cur); }, allBounds[0]);
+      map.fitBounds(combined, {padding: [20, 20]});
     }
   </script>
 </body>
